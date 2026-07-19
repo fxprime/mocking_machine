@@ -63,6 +63,9 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, n
 
 `u32 schema, u32 baud, u32 control_period_us, u32 CPR, u16 stream_rate_hz, u16 selected_profile_id, f32 kp, f32 ki, f32 kd, f32 vmax, f32 amax, f32 jmax, f32 imax, f32 max_duty, f32 start_duty_forward, f32 start_duty_reverse, u8 load_setting_id, u8 load_count, i8 motor_direction, u8 stop_mode, f32 supply_divider_gain, f32 supply_input_offset_v, f32 min_supply_voltage_v, f32 max_supply_voltage_v, u8 supply_voltage_pin, f32 current_gain_a_per_v, f32 current_offset_v, u8 current_sense_pin, u8 current_sense_enabled, u8 driver_diagnostic_enabled, u8 driver_diagnostic_pin, u32 encoder_timeout_ms, f32 encoder_timeout_velocity_rad_s, f32 max_feedback_correction, u8 estimator_min_counts, u32 estimator_max_window_us, u32 estimator_stale_timeout_us, f32 current_filter_cutoff_hz`
 
+The feedback-correction and three estimator-tuning fields are retained for packet/NVS
+compatibility but are ignored while the classic count-delta velocity path is active.
+
 The encoder watchdog begins its timeout window when desired velocity first exceeds `encoder_timeout_velocity_rad_s`; time spent stationary before a run is not counted. Each valid quadrature transition refreshes encoder activity. Dropping below the threshold or stopping resets the window.
 
 `SET_DRIVER_DIAGNOSTIC` carries `u8 enabled` (`0` or `1`). It is accepted while disarmed. Disabling is also accepted from a diagnostic-fault state so a disconnected input cannot lock out the machine. The setting is applied immediately and saved.

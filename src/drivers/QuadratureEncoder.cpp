@@ -37,10 +37,6 @@ void IRAM_ATTR QuadratureEncoder::handleEdge() {
   previous_state_ = state;
   if (delta != 0) {
     const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
-    const int8_t direction = delta > 0 ? 1 : -1;
-    period_averager_.addEdge(now, direction);
-    edge_period_us_ = period_averager_.averagePeriodUs();
-    edge_direction_ = direction;
     last_edge_us_ = now;
   }
   portEXIT_CRITICAL_ISR(&mutex_);
@@ -56,13 +52,6 @@ int64_t QuadratureEncoder::count() const {
 uint64_t QuadratureEncoder::lastEdgeTimestampUs() const {
   portENTER_CRITICAL(&mutex_);
   const uint64_t result = last_edge_us_;
-  portEXIT_CRITICAL(&mutex_);
-  return result;
-}
-
-EncoderEdgeTiming QuadratureEncoder::edgeTiming() const {
-  portENTER_CRITICAL(&mutex_);
-  const EncoderEdgeTiming result{last_edge_us_, edge_period_us_, edge_direction_};
   portEXIT_CRITICAL(&mutex_);
   return result;
 }

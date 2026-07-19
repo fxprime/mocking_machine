@@ -11,7 +11,6 @@ class Vnh2sp30MotorDriver {
   bool begin(const MachineSettings& settings);
   void command(float signed_duty);
   void commandRaw(float signed_duty);
-  float velocityFeedforwardDuty(float desired_velocity_rad_s) const;
   void stop();
   void disable();
   float currentAmperes() const;

@@ -50,7 +50,9 @@ Missed control ticks are never replayed against stale sensor data. The scheduler
 - `esp_timer_get_time()` supplies monotonic 64-bit microseconds.
 - Both quadrature channels use CHANGE interrupts and a 16-entry Gray-code transition table.
 - The zero-index interrupt stores both the exact rising-edge timestamp and encoder count.
-- The estimator accumulates counts until either a configurable count threshold or maximum window is reached. This avoids severe low-speed quantization while retaining fast updates at high speed.
+- The estimator calculates count delta over each actual control interval and then applies the
+  configured first-order velocity filter. Encoder edge timestamps remain dedicated to the
+  encoder-activity watchdog.
 - `counts_per_output_revolution` must include quadrature multiplication and gearbox placement. The default `184` is a placeholder from the mecanum reference and must be measured for this motor.
 
 ## Configuration model

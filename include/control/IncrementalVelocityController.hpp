@@ -8,9 +8,7 @@ class IncrementalVelocityController {
  public:
   void configure(const ControlConfiguration& configuration);
   void reset(float output = 0.0F);
-  float update(float desired_rad_s, float measured_rad_s, float dt_s,
-               float feedforward = 0.0F,
-               float feedback_limit = 3.402823466e+38F);
+  float update(float desired_rad_s, float measured_rad_s, float dt_s);
   float output() const { return output_; }
   float error() const { return error_1_; }
   float proportionalTerm() const { return proportional_term_; }
@@ -20,7 +18,6 @@ class IncrementalVelocityController {
  private:
   ControlConfiguration configuration_{};
   float output_ = 0.0F;
-  float feedback_output_ = 0.0F;
   float error_1_ = 0.0F;
   float error_2_ = 0.0F;
   float proportional_term_ = 0.0F;

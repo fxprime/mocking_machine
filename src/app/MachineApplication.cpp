@@ -265,9 +265,7 @@ MachineApplication& MachineApplication::instance() {
 
 void MachineApplication::configureVelocityController() {
   ControlConfiguration configuration = settings_.control;
-  // Profiles are one-direction. motor_direction chooses the electrical direction;
-  // closed-loop feedback must never request reverse bridge torque.
-  configuration.output_min = 0.0F;
+  configuration.output_min = -settings_.safety.max_duty;
   configuration.output_max = settings_.safety.max_duty;
   controller_.configure(configuration);
 }
@@ -365,10 +363,8 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   telemetry_.encoder_count = encoder_.count();
   telemetry_.last_zero_timestamp_us = zero_index_.timestampUs();
   telemetry_.last_zero_encoder_count = zero_index_.encoderCount();
-  const EncoderEdgeTiming edge_timing = encoder_.edgeTiming();
   telemetry_.measured_velocity_rad_s = velocity_estimator_.update(
-      telemetry_.encoder_count, scheduled_us, edge_timing.timestamp_us,
-      edge_timing.period_us, edge_timing.direction);
+      telemetry_.encoder_count, scheduled_us);
   const float current_sense_voltage_v = motor_.currentSenseVoltage();
   telemetry_.current_a = current_filter_.update(
       motor_.currentAmperesFromVoltage(current_sense_voltage_v), dt_s);
@@ -395,16 +391,12 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
     const float raw_target = profile_.target(scheduled_us);
     telemetry_.desired_velocity_rad_s = motion_limiter_.update(raw_target, dt_s);
     if (telemetry_.desired_velocity_rad_s > 0.0F) {
-      const float feedforward =
-          motor_.velocityFeedforwardDuty(telemetry_.desired_velocity_rad_s);
       telemetry_.controller_output = controller_.update(
-          telemetry_.desired_velocity_rad_s, telemetry_.measured_velocity_rad_s, dt_s,
-          feedforward, settings_.control.max_feedback_correction);
+          telemetry_.desired_velocity_rad_s, telemetry_.measured_velocity_rad_s, dt_s);
       telemetry_.controller_proportional_term = controller_.proportionalTerm();
       telemetry_.controller_integral_term = controller_.integralTerm();
       telemetry_.controller_derivative_term = controller_.derivativeTerm();
-      // controller_output is final physical duty; do not add breakaway compensation twice.
-      motor_.commandRaw(telemetry_.controller_output);
+      motor_.command(telemetry_.controller_output);
     } else {
       controller_.reset();
       telemetry_.controller_output = 0.0F;

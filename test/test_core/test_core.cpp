@@ -8,10 +8,8 @@
 #include "control/CurrentCalibration.hpp"
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
-#include "control/MotorFeedforward.hpp"
 #include "control/MotionLimiter.hpp"
 #include "control/VelocityEstimator.hpp"
-#include "drivers/EncoderPeriodAverager.hpp"
 #include "profile/VelocityProfile.hpp"
 #include "protocol/Crc16.hpp"
 
@@ -67,32 +65,6 @@ void test_incremental_controller_reports_each_delta_term() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, -4.0F, controller.proportionalTerm());
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 2.4F, controller.integralTerm());
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, -80.0F, controller.derivativeTerm());
-}
-
-void test_velocity_controller_bounds_feedback_around_feedforward() {
-  ControlConfiguration configuration{};
-  configuration.kp = 0.2F;
-  configuration.ki = 0.0F;
-  configuration.kd = 0.0F;
-  configuration.error_deadband_rad_s = 0.0F;
-  configuration.output_min = 0.0F;
-  configuration.output_max = 0.9F;
-  IncrementalVelocityController controller;
-  controller.configure(configuration);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.3F,
-                           controller.update(10.0F, 10.0F, 0.002F, 0.3F, 0.1F));
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.2F,
-                           controller.update(10.0F, 20.0F, 0.002F, 0.3F, 0.1F));
-  TEST_ASSERT_TRUE(controller.output() >= 0.0F);
-}
-
-void test_motor_feedforward_maps_velocity_to_physical_duty() {
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F,
-                           motorFeedforwardDuty(0.0F, 0.18F, 166.5F, 0.9F));
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.18F,
-                           motorFeedforwardDuty(0.001F, 0.18F, 166.5F, 0.9F));
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.9F,
-                           motorFeedforwardDuty(166.5F, 0.18F, 166.5F, 0.9F));
 }
 
 void test_low_pass_filter_uses_cutoff_and_elapsed_time() {
@@ -162,36 +134,17 @@ void test_velocity_estimator_uses_output_shaft_cpr() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 6.2831853F, velocity);
 }
 
-void test_velocity_estimator_uses_edge_period_below_count_window_threshold() {
+void test_velocity_estimator_uses_each_control_interval_count_delta() {
   EncoderConfiguration encoder{};
   encoder.counts_per_output_revolution = 184;
-  encoder.estimator_min_counts = 4;
-  encoder.estimator_max_window_us = 20000;
-  encoder.estimator_stale_timeout_us = 100000;
   VelocityEstimator estimator;
   estimator.configure(encoder, 0.0F);
   estimator.reset(0, 1000);
-  constexpr uint32_t edge_period_us = 17074;
-  const float velocity = estimator.update(2, 36000, 35148, edge_period_us, 1);
-  TEST_ASSERT_FLOAT_WITHIN(0.02F, 2.0F, velocity);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F,
-                           estimator.update(2, 136000, 35148, edge_period_us, 1));
-}
-
-void test_encoder_period_averager_uses_recent_edge_history() {
-  EncoderPeriodAverager averager;
-  averager.addEdge(1000U, 1);
-  averager.addEdge(9000U, 1);
-  averager.addEdge(21000U, 1);
-  averager.addEdge(29000U, 1);
-  averager.addEdge(45000U, 1);
-  TEST_ASSERT_EQUAL_UINT32(11000U, averager.averagePeriodUs());
-
-  // Direction changes must not mix the old direction into the new estimate.
-  averager.addEdge(50000U, -1);
-  TEST_ASSERT_EQUAL_UINT32(0U, averager.averagePeriodUs());
-  averager.addEdge(62000U, -1);
-  TEST_ASSERT_EQUAL_UINT32(12000U, averager.averagePeriodUs());
+  const float radians_per_count = 6.283185307F / 184.0F;
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, estimator.update(0, 3000));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, radians_per_count / 0.002F,
+                           estimator.update(1, 5000));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, estimator.update(1, 7000));
 }
 
 void test_sine_profile_stays_one_direction() {
@@ -282,16 +235,13 @@ int main(int, char**) {
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);
   RUN_TEST(test_incremental_controller_reports_each_delta_term);
-  RUN_TEST(test_velocity_controller_bounds_feedback_around_feedforward);
-  RUN_TEST(test_motor_feedforward_maps_velocity_to_physical_duty);
   RUN_TEST(test_low_pass_filter_uses_cutoff_and_elapsed_time);
   RUN_TEST(test_two_point_current_calibration_calculates_gain_and_offset);
   RUN_TEST(test_two_point_current_calibration_rejects_insufficient_span);
   RUN_TEST(test_current_calibration_capture_averages_incrementally);
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
-  RUN_TEST(test_velocity_estimator_uses_edge_period_below_count_window_threshold);
-  RUN_TEST(test_encoder_period_averager_uses_recent_edge_history);
+  RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
   RUN_TEST(test_sine_profile_stays_one_direction);
   RUN_TEST(test_waypoint_profile_interpolates_and_stops_at_duration);
   RUN_TEST(test_vin_divider_nominal_gain);

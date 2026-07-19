@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "control/MotorFeedforward.hpp"
-
 namespace mm {
 
 bool Vnh2sp30MotorDriver::begin(const MachineSettings& settings) {
@@ -73,14 +71,6 @@ void Vnh2sp30MotorDriver::commandRaw(float signed_duty) {
   const auto pwm = static_cast<uint32_t>(std::lround(magnitude * kPwmMaximum));
   ledcWrite(kPwmChannel, pwm);
   applied_duty_ = logical_forward ? magnitude : -magnitude;
-}
-
-float Vnh2sp30MotorDriver::velocityFeedforwardDuty(
-    const float desired_velocity_rad_s) const {
-  return motorFeedforwardDuty(desired_velocity_rad_s,
-                              characteristics_.start_duty_forward,
-                              characteristics_.max_velocity_forward_rad_s,
-                              safety_.max_duty);
 }
 
 void Vnh2sp30MotorDriver::stop() {
