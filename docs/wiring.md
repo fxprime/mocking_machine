@@ -23,6 +23,11 @@ does not reset, suppress, or otherwise modify the GPIO32/33 encoder count. At th
 150 rad/s maximum, one revolution is about 41.9 ms, so the 5 ms default remains comfortably
 below the expected one-pulse-per-revolution interval.
 
+After the first reference, the default `zero_index_correction_gain` of 0.10 applies only 10%
+of each measured index phase error. Encoder counts therefore control short-term position and
+the optical index removes drift gradually. Increase the gain only when missed encoder counts
+are confirmed; high gain also transfers more optical-trigger jitter into the reported angle.
+
 ## Power wiring
 
 1. Connect the 12 V supply through an appropriately rated fuse and a latching emergency-stop/power contactor to module motor `V+`.

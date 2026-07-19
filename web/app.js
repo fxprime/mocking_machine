@@ -2,6 +2,7 @@ import { configurationPreparation, profilePreparation, resultDescription } from 
 import { calculateStepMetrics, symmetricNiceLimit } from "./response-metrics.mjs";
 import { estimateClosedLoopStepResponse } from "./step-response-estimator.mjs";
 import { createTelemetryCsv } from "./csv-export.mjs";
+import { updateRotorVisualState } from "./rotor-position.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -43,6 +44,7 @@ let stepEstimate;
 let latestState = 0;
 let latestFaults = 0;
 let latestCurrentA = 0;
+let rotorVisualState;
 let motorTestActive = false;
 let motorTestTimer;
 let characterizationAction;
@@ -163,8 +165,11 @@ function handleMessage(id, data) {
       estimatorMaxWindowUs: data.byteLength >= 114 ? data.getUint32(106, true) : 20000,
       estimatorStaleTimeoutUs: data.byteLength >= 114 ? data.getUint32(110, true) : 100000,
       currentFilterCutoffHz: data.byteLength >= 118 ? data.getFloat32(114, true) : 20,
-      zeroIndexMinIntervalUs: data.byteLength >= 122 ? data.getUint32(118, true) : 5000
+      zeroIndexMinIntervalUs: data.byteLength >= 122 ? data.getUint32(118, true) : 5000,
+      zeroIndexCorrectionGain: data.byteLength >= 126 ? data.getFloat32(122, true) : 0.1,
+      encoderDirection: data.byteLength >= 127 ? data.getInt8(126) : 1
     };
+    rotorVisualState = undefined;
     renderSettings();
     renderProfiles();
     sendCurrentCalibrationCommand(CURRENT_CALIBRATION_ACTION.REQUEST_STATUS);
@@ -487,7 +492,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; rotorVisualState = undefined; latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); }
 }
 
 function updateState(state, faults) {
@@ -518,7 +523,11 @@ function renderTelemetry(sample) {
   $("rotorPosition").textContent = Number.isFinite(rotorPosition)
                                      ? rotorPosition.toFixed(1)
                                      : "—";
-  $("rotorNeedle").style.transform = `rotate(${Number.isFinite(rotorPosition) ? rotorPosition : 0}deg)`;
+  rotorVisualState = Number.isFinite(rotorPosition)
+      ? updateRotorVisualState(rotorVisualState, rotorPosition, sample.count,
+                               settings.cpr, settings.encoderDirection)
+      : undefined;
+  $("rotorNeedle").style.transform = `rotate(${rotorVisualState?.unwrappedAngleDeg ?? 0}deg)`;
   $("rotorDial").classList.toggle("unreferenced", !Number.isFinite(rotorPosition));
   $("rotorDial").setAttribute("aria-label", Number.isFinite(rotorPosition)
       ? `Rotor position ${rotorPosition.toFixed(1)} degrees; zero index ${sample.zeroSequence}; ${sample.zeroRejected} rejected bounce edges`
@@ -704,6 +713,7 @@ const parameterDefinitions = {
   currentSenseEnabled: { id: 28, decimals: 0, step: 1, min: 0, max: 1, description: "Enable current protection: 0 = disabled, 1 = enabled" },
   currentFilterCutoffHz: { id: 29, decimals: 1, step: 0.1, min: 0.1, max: 200, description: "First-order current-sense low-pass cutoff in Hz; lower values reduce noise but delay overcurrent detection" },
   zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between zero-index rising edges in microseconds; closer edges are counted as bounce" },
+  zeroIndexCorrectionGain: { id: 31, decimals: 3, step: 0.01, min: 0, max: 1, description: "Fraction of zero-index phase error corrected per accepted pulse; 0 trusts encoder counts only after initial reference, 1 snaps fully to every pulse" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },

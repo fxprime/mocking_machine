@@ -47,6 +47,15 @@ struct LegacyEncoderConfigurationV7 {
   uint32_t estimator_stale_timeout_us;
 };
 
+struct LegacyEncoderConfigurationV8 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+  uint32_t estimator_stale_timeout_us;
+  uint32_t zero_index_min_interval_us;
+};
+
 struct LegacyMotorCharacteristicsV6 {
   float start_duty_forward;
   float start_duty_reverse;
@@ -174,6 +183,32 @@ struct LegacyPersistedSettingsV7 {
   uint16_t crc;
 };
 
+struct LegacyMachineSettingsV8 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV8 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV8 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV8 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
               "Schema-v4 to v5 migration layout assumption changed");
@@ -183,8 +218,11 @@ static_assert(sizeof(LegacyMachineSettingsV5) + sizeof(float) + sizeof(uint32_t)
 static_assert(sizeof(LegacyMachineSettingsV6) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV7),
               "Schema-v6 to v7 migration layout assumption changed");
-static_assert(sizeof(LegacyMachineSettingsV7) + sizeof(uint32_t) == sizeof(MachineSettings),
+static_assert(sizeof(LegacyMachineSettingsV7) + sizeof(uint32_t) ==
+                  sizeof(LegacyMachineSettingsV8),
               "Schema-v7 to v8 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV8) + sizeof(float) == sizeof(MachineSettings),
+              "Schema-v8 to v9 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
                        ControlConfiguration& target) {
@@ -213,6 +251,16 @@ void copyLegacyEncoder(const LegacyEncoderConfigurationV7& source,
   target.estimator_min_counts = source.estimator_min_counts;
   target.estimator_max_window_us = source.estimator_max_window_us;
   target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV8& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+  target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
+  target.zero_index_min_interval_us = source.zero_index_min_interval_us;
 }
 
 void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
@@ -256,6 +304,7 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.motor.current_offset_v) ||
       !finite(settings.motor.current_filter_cutoff_hz) ||
       !finite(settings.safety.encoder_timeout_velocity_rad_s) ||
+      !finite(settings.encoder.zero_index_correction_gain) ||
       !finite(settings.supply_voltage.divider_gain) ||
       !finite(settings.supply_voltage.input_offset_v) ||
       !finite(settings.safety.min_supply_voltage_v) ||
@@ -293,6 +342,10 @@ bool SettingsStore::validate(const MachineSettings& settings) {
           EncoderConfiguration::kMinimumZeroIndexMinimumIntervalUs ||
       settings.encoder.zero_index_min_interval_us >
           EncoderConfiguration::kMaximumZeroIndexMinimumIntervalUs ||
+      settings.encoder.zero_index_correction_gain <
+          EncoderConfiguration::kMinimumZeroIndexCorrectionGain ||
+      settings.encoder.zero_index_correction_gain >
+          EncoderConfiguration::kMaximumZeroIndexCorrectionGain ||
       settings.safety.encoder_timeout_ms < 50U ||
       settings.safety.encoder_timeout_ms > 10000U ||
       settings.safety.encoder_timeout_velocity_rad_s <= 0.0F ||
@@ -375,6 +428,32 @@ bool SettingsStore::load(MachineSettings& settings) {
         validate(blob.payload)) {
       settings = blob.payload;
       loaded = true;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV8)) {
+    LegacyPersistedSettingsV8 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 8U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV7)) {
     LegacyPersistedSettingsV7 blob{};

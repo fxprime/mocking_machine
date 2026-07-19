@@ -90,6 +90,9 @@ struct EncoderConfiguration {
   static constexpr uint32_t kDefaultZeroIndexMinimumIntervalUs = 5000U;
   static constexpr uint32_t kMinimumZeroIndexMinimumIntervalUs = 100U;
   static constexpr uint32_t kMaximumZeroIndexMinimumIntervalUs = 1000000U;
+  static constexpr float kDefaultZeroIndexCorrectionGain = 0.10F;
+  static constexpr float kMinimumZeroIndexCorrectionGain = 0.0F;
+  static constexpr float kMaximumZeroIndexCorrectionGain = 1.0F;
 
   uint32_t counts_per_output_revolution = 184;
   int8_t direction = 1;
@@ -97,6 +100,7 @@ struct EncoderConfiguration {
   uint32_t estimator_max_window_us = 20000;
   uint32_t estimator_stale_timeout_us = 100000;
   uint32_t zero_index_min_interval_us = kDefaultZeroIndexMinimumIntervalUs;
+  float zero_index_correction_gain = kDefaultZeroIndexCorrectionGain;
 };
 
 struct CharacterizationConfiguration {
@@ -142,7 +146,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 8;
+  static constexpr uint32_t kSchemaVersion = 9;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

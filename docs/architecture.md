@@ -51,8 +51,10 @@ Missed control ticks are never replayed against stale sensor data. The scheduler
 - Both quadrature channels use CHANGE interrupts and a 16-entry Gray-code transition table.
 - The zero-index interrupt accepts the first rising edge, rejects later edges inside the
   configurable debounce interval, and atomically stores the accepted timestamp and encoder
-  count. Rejected zero edges never alter quadrature counting. Rotor position is the directed
-  encoder-count difference from that reference, wrapped to 0–360°.
+  count. Rejected zero edges never alter quadrature counting. The first accepted index creates
+  the absolute phase reference; subsequent motion comes entirely from encoder-count changes.
+  Later index events apply a configurable fraction of the measured phase error to a persistent
+  offset, preventing long-term drift without allowing trigger jitter to replace encoder motion.
 - The estimator calculates count delta over each actual control interval and then applies the
   configured first-order velocity filter. Encoder edge timestamps remain dedicated to the
   encoder-activity watchdog.

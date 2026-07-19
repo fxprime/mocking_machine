@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:web": "node scripts/test_web.mjs && node scripts/test_step_response.mjs && node scripts/test_csv_export.mjs"
+    "test:web": "node scripts/test_web.mjs && node scripts/test_step_response.mjs && node scripts/test_csv_export.mjs && node scripts/test_rotor_position.mjs"
   }
 }

@@ -9,6 +9,7 @@
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
+#include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "core/Types.hpp"
 #include "drivers/QuadratureEncoder.hpp"
@@ -89,6 +90,7 @@ class MachineApplication final {
   IncrementalVelocityController controller_{};
   MotionLimiter motion_limiter_{};
   EncoderActivityWatchdog encoder_watchdog_{};
+  RotorPhaseTracker rotor_phase_tracker_{};
   LowPassFilter current_filter_{};
   VelocityProfile profile_{};
   VelocityProfileConfiguration tuning_profile_{};
