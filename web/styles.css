@@ -82,7 +82,7 @@ main { max-width: 1480px; margin: auto; padding: 0 2rem 3rem; }
 .fault-banner.with-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .fault-banner.with-action.hidden { display: none; }
 .fault-banner.with-action button { flex: 0 0 auto; border-color: #ffd9dc; }
-.hidden { display: none; }
+.hidden, [hidden] { display: none !important; }
 .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 1rem 0; }
 label { color: var(--on-muted); } label input, label select { display: block; width: 100%; margin-top: .25rem; color: var(--on-surface); }
 .checkbox-option, .radio-option { display: inline-flex; align-items: center; gap: .55rem; margin: .5rem 1rem .75rem 0; color: var(--on-surface); }

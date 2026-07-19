@@ -37,7 +37,7 @@ let tuningAction;
 let tuningTestActive = false;
 let tuningTestSawRunning = false;
 let tuningSamples = [];
-let tuningTestMode = "manual";
+let tuningTestMode = "profile";
 let tuningTargetVelocity = 0;
 let stepEstimate;
 let latestState = 0;
@@ -1480,12 +1480,16 @@ $("saveGains").addEventListener("click", async () => {
   $("saveGains").disabled = true;
   setGainState("● Draft — not applied", "offline");
 }));
+function renderTuningTestInputMode(mode) {
+  const profileControls = $("tuningProfileControls");
+  const manualControls = $("tuningManualControls");
+  profileControls.hidden = mode !== "profile";
+  manualControls.hidden = mode !== "manual";
+}
 document.querySelectorAll('input[name="tuningTestMode"]').forEach(input => input.addEventListener("change", () => {
-  const manual = input.checked && input.value === "manual";
-  if (!input.checked) return;
-  $("tuningManualControls").classList.toggle("hidden", !manual);
-  $("tuningProfileControls").classList.toggle("hidden", manual);
+  if (input.checked) renderTuningTestInputMode(input.value);
 }));
+renderTuningTestInputMode(document.querySelector('input[name="tuningTestMode"]:checked').value);
 $("startTuningTest").addEventListener("click", startTuningResponseTest);
 $("stopTuningTest").addEventListener("click", () => sendFrame(MSG.STOP_RUN));
 for (const id of ["stepFftWindow", "stepResponseDuration", "stepRegularization", "stepCutoffHz", "stepMinimumExcitation"]) $(id).addEventListener("change", updateStepEstimate);

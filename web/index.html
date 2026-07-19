@@ -98,13 +98,13 @@
         <div class="panel-heading"><div><h2>Response test</h2><p>Run a stored velocity profile or a constrained manual velocity step.</p></div><span id="tuningTestState" class="status-badge offline">● Ready</span></div>
         <fieldset>
           <legend>Test input</legend>
-          <label class="radio-option"><input type="radio" name="tuningTestMode" value="profile" checked> Stored profile</label>
-          <label class="radio-option"><input type="radio" name="tuningTestMode" value="manual"> Manual velocity step</label>
+          <label class="radio-option"><input type="radio" name="tuningTestMode" value="profile" aria-controls="tuningProfileControls" checked> Stored profile</label>
+          <label class="radio-option"><input type="radio" name="tuningTestMode" value="manual" aria-controls="tuningManualControls"> Manual velocity step</label>
         </fieldset>
         <div id="tuningProfileControls" class="form-grid tuning-source-controls">
           <label>Profile <select id="tuningProfileSelect"></select></label>
         </div>
-        <div id="tuningManualControls" class="form-grid tuning-source-controls hidden">
+        <div id="tuningManualControls" class="form-grid tuning-source-controls" hidden>
           <label>Target velocity (rad/s) <input id="tuningManualVelocity" type="number" min="0.1" step="0.1" value="20"></label>
           <label>Run time (s) <input id="tuningManualDuration" type="number" min="0.1" max="3600" step="0.1" value="5"></label>
         </div>

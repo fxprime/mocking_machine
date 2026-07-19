@@ -30,6 +30,10 @@ assert.match(indexSource, /id="cancelCurrentCalibration"/);
 assert.match(indexSource, /id="currentCalibrationWorkspace"/);
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
+assert.match(indexSource, /id="tuningManualControls"[^>]*\shidden(?:\s|>)/,
+  "Manual response-test inputs must start hidden while Stored profile is selected");
+assert.match(appSource, /function renderTuningTestInputMode[\s\S]*profileControls\.hidden = mode !== "profile"[\s\S]*manualControls\.hidden = mode !== "manual"/,
+  "Response-test mode must exclusively reveal its matching input controls");
 assert.doesNotMatch(indexSource, /id="currentCalibrationDialog"/);
 assert.doesNotMatch(indexSource, /id="motorTestCalibrateCurrent"/);
 assert.match(appSource, /CURRENT_CALIBRATION_STATUS:\s*0x0302/);
