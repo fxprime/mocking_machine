@@ -23,12 +23,19 @@ assert.ok(startAck >= 0 && closeAfterStart > startAck, "Editor must close only a
 assert.match(appSource, /currentSenseEnabled:\s*\{\s*id:\s*28,[^}]*min:\s*0,[^}]*max:\s*1/);
 assert.match(appSource, /currentFilterCutoffHz:\s*\{\s*id:\s*29,[^}]*min:\s*0\.1,[^}]*max:\s*200/);
 assert.match(appSource, /zeroIndexCorrectionGain:\s*\{\s*id:\s*31,[^}]*min:\s*0,[^}]*max:\s*1/);
+assert.match(appSource, /view\.setUint16\(0, parameterDefinitions\.cpr\.id, true\)/,
+  "Encoder calibration must save through the validated CPR parameter path");
 assert.match(appSource, /typeof settings\[key\] === "boolean"\s*\?\s*\(settings\[key\] \? 1 : 0\)/);
 assert.match(indexSource, /id="captureCurrentPoint1"/);
 assert.match(indexSource, /id="captureCurrentPoint2"/);
 assert.match(indexSource, /id="saveCurrentCalibration"/);
 assert.match(indexSource, /id="cancelCurrentCalibration"/);
 assert.match(indexSource, /id="currentCalibrationWorkspace"/);
+assert.match(indexSource, /id="encoderCalibrationWorkspace"/);
+assert.match(indexSource, /id="startEncoderCalibration"/);
+assert.match(indexSource, /id="finishEncoderCalibration"/);
+assert.match(indexSource, /id="encoderCalibrationResult"/);
+assert.match(indexSource, /id="saveEncoderCalibration"/);
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");

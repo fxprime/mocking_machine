@@ -203,6 +203,48 @@
     </section>
 
     <section id="calibration" class="page">
+      <article id="encoderCalibrationWorkspace" class="panel">
+        <div class="panel-heading">
+          <div><h2>Output-shaft encoder calibration</h2><p>Measure quadrature counts over 1–10 complete output-shaft revolutions. The result is shown for review before anything is saved.</p></div>
+          <span id="encoderCalibrationState" class="status-badge offline">● Ready</span>
+        </div>
+        <div class="fault-banner">▲ Disarm the motor and isolate drive power according to your rig procedure. Keep the ESP32 powered, turn the output shaft slowly by hand, and stop at the same physical mark.</div>
+        <div class="metric-grid compact-metrics">
+          <article class="metric"><span>Configured counts / revolution</span><strong id="encoderConfiguredCpr">—</strong></article>
+          <article class="metric"><span>Live encoder count</span><strong id="encoderCalibrationLiveCount">—</strong></article>
+          <article class="metric"><span>Count change from start</span><strong id="encoderCalibrationLiveDelta">—</strong></article>
+        </div>
+        <div class="form-grid encoder-calibration-controls">
+          <label>Manual output-shaft revolutions
+            <input id="encoderCalibrationRevolutions" type="number" min="1" max="10" step="1" value="5" inputmode="numeric">
+          </label>
+        </div>
+        <ol class="calibration-steps">
+          <li>Align a visible shaft mark with a fixed reference, then capture the start count.</li>
+          <li>Turn the output shaft exactly the selected number of full revolutions in either direction.</li>
+          <li>Stop on the same mark and finish the measurement.</li>
+        </ol>
+        <div class="action-row">
+          <button id="startEncoderCalibration" type="button" disabled>Capture start count</button>
+          <button id="finishEncoderCalibration" type="button" disabled>Finish measurement</button>
+        </div>
+        <section id="encoderCalibrationResult" class="hidden" aria-live="polite">
+          <h3>Review candidate</h3>
+          <dl class="result-grid">
+            <div><dt>Start count</dt><dd id="encoderCalibrationStartCount">—</dd></div>
+            <div><dt>Signed count change</dt><dd id="encoderCalibrationCountDelta">—</dd></div>
+            <div><dt>Measured counts / revolution</dt><dd id="encoderCalibrationMeasuredCpr">—</dd></div>
+            <div><dt>Firmware value after rounding</dt><dd id="encoderCalibrationCandidateCpr">—</dd></div>
+            <div><dt>Change from configured value</dt><dd id="encoderCalibrationChange">—</dd></div>
+            <div><dt>Total rounding residual</dt><dd id="encoderCalibrationResidual">—</dd></div>
+          </dl>
+          <p class="notice">Counts include all decoded A/B quadrature edges. The firmware stores a whole-number count per output-shaft revolution.</p>
+          <div class="dialog-actions calibration-actions">
+            <button id="cancelEncoderCalibration" type="button">Discard measurement</button>
+            <button id="saveEncoderCalibration" type="button" class="primary">Apply and save CPR</button>
+          </div>
+        </section>
+      </article>
       <article id="currentCalibrationWorkspace" class="panel">
         <div class="panel-heading"><div><h2>Two-point current calibration</h2><p>Capture zero current, run the motor from this workspace, then capture a higher-current point. No calibration value is applied until Save.</p></div><span id="currentCalibrationState" class="status-badge offline">● No points</span></div>
         <div class="fault-banner">▲ Remove imbalance weights, close the rotor guard, connect a trusted current meter, and keep the emergency stop accessible.</div>

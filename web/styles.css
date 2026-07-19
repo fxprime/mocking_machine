@@ -116,6 +116,9 @@ dialog.profile-dialog { width: min(1120px, calc(100vw - 2rem)); max-width: none;
 dialog::backdrop { background: rgba(0,0,0,.72); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .75rem; margin-top: 1.5rem; }
 .calibration-reading { display: flex; justify-content: space-between; align-items: baseline; padding: .8rem; margin: 1rem 0; background: var(--surface-soft); border: 1px solid var(--outline); border-radius: 6px; }
+.encoder-calibration-controls { grid-template-columns: minmax(220px, 360px); }
+.calibration-steps { max-width: 78ch; color: var(--on-muted); }
+.calibration-steps li { margin-bottom: .35rem; padding-left: .25rem; }
 .calibration-point-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .calibration-point-grid fieldset { margin: 0; }
 .calibration-point-grid button { width: 100%; margin-top: .75rem; }

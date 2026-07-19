@@ -79,7 +79,7 @@ Manual duty expires automatically. Characterization requires the literal `CONFIR
 
 ## Browser console
 
-The dependency-free console targets a rectangular desktop browser around 1440×900 at desk distance, English/LTR, keyboard and pointer. It uses a compact 1.125 type scale, persistent connection/machine/fault state, visible focus, reduced-motion support, actuator confirmation dialogs, live response chart, settings table, tuning controls, terminal, calibration, and CSV export.
+The dependency-free console targets a rectangular desktop browser around 1440×900 at desk distance, English/LTR, keyboard and pointer. It uses a compact 1.125 type scale, persistent connection/machine/fault state, visible focus, reduced-motion support, actuator confirmation dialogs, live response chart, settings table, tuning controls, terminal, calibration, and CSV export. Encoder CPR calibration is host-guided: telemetry supplies the 64-bit start/end counts, the browser averages their absolute difference over 1–10 manually entered output-shaft turns, and an explicit review action saves the rounded integer through the normal disarmed `SET_PARAMETER` path. It adds no work to the control loop.
 
 Connecting automatically starts only the telemetry stream. It never arms or starts the motor.
 

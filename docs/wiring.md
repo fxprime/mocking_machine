@@ -78,7 +78,12 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
 ## Commissioning order
 
 1. Test firmware and serial with motor power disconnected.
-2. Verify encoder GPIO32/33 count direction by turning the shaft by hand; set CPR and direction.
+2. With the motor disarmed, use **Calibration → Output-shaft encoder calibration**. Mark the
+   output shaft, capture the start count, rotate it 5–10 complete turns, and stop at the same
+   mark. Review the signed count change, measured counts/revolution, rounded firmware value,
+   and percentage change before saving. The displayed count includes all decoded quadrature
+   edges, so it may be four times a single-channel pulse or magnetic pole-cycle specification.
+   Direction is intentionally not changed by this calibration.
 3. Verify zero-index timestamp/count by turning slowly by hand.
 4. Verify INA/INB/PWM and DIAG levels with a scope or logic analyzer.
 5. Calibrate GPIO36 VIN against a multimeter, then calibrate CS with a current-limited bench supply.

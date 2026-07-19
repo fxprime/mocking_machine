@@ -3,6 +3,7 @@ import { calculateStepMetrics, symmetricNiceLimit } from "./response-metrics.mjs
 import { estimateClosedLoopStepResponse } from "./step-response-estimator.mjs";
 import { createTelemetryCsv } from "./csv-export.mjs";
 import { updateRotorVisualState } from "./rotor-position.mjs";
+import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -44,7 +45,12 @@ let stepEstimate;
 let latestState = 0;
 let latestFaults = 0;
 let latestCurrentA = 0;
+let latestEncoderCount;
 let rotorVisualState;
+let encoderCalibrationStartCount;
+let encoderCalibrationTurns;
+let encoderCalibrationCandidate;
+let encoderCalibrationSavePending = false;
 let motorTestActive = false;
 let motorTestTimer;
 let characterizationAction;
@@ -171,6 +177,7 @@ function handleMessage(id, data) {
     };
     rotorVisualState = undefined;
     renderSettings();
+    renderEncoderCalibration();
     renderProfiles();
     sendCurrentCalibrationCommand(CURRENT_CALIBRATION_ACTION.REQUEST_STATUS);
   } else if (id === MSG.PROFILE_CONFIGURATION) {
@@ -335,6 +342,22 @@ function handleMessage(id, data) {
     }
     if (request === MSG.SET_PARAMETER) {
       pendingParameterPayload = undefined;
+      if (encoderCalibrationSavePending) {
+        encoderCalibrationSavePending = false;
+        if (result === 0) {
+          encoderCalibrationStartCount = undefined;
+          encoderCalibrationTurns = undefined;
+          encoderCalibrationCandidate = undefined;
+          $("encoderCalibrationResult").classList.add("hidden");
+          setEncoderCalibrationState("✓ Saved", "online");
+          toast("Encoder counts per output revolution applied and saved.");
+        } else {
+          setEncoderCalibrationState("▲ Save rejected", "fault");
+          toast(`Encoder calibration was not saved: ${resultDescription(result)}.`);
+        }
+        renderEncoderCalibration();
+        return;
+      }
       if (result === 0) {
         if ($("parameterEditorDialog").open) $("parameterEditorDialog").close("save");
         toast("Parameter applied and saved.");
@@ -492,12 +515,16 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; rotorVisualState = undefined; latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); }
+  renderEncoderCalibration();
 }
 
 function updateState(state, faults) {
   latestState = state;
   latestFaults = faults;
+  if (state !== 0 && (encoderCalibrationStartCount !== undefined || encoderCalibrationCandidate)) {
+    resetEncoderCalibration("▲ Measurement cancelled", "Motor must remain disarmed during manual encoder calibration.");
+  }
   if (currentCalibrationDriveActive && state !== 1) setCurrentCalibrationDriveActive(false);
   const names = ["DISARMED", "ARMED", "RUNNING", "FAULT"];
   $("machineState").textContent = names[state] ?? `UNKNOWN ${state}`;
@@ -510,6 +537,7 @@ function updateState(state, faults) {
 
 function renderTelemetry(sample) {
   latestCurrentA = sample.current;
+  latestEncoderCount = sample.count;
   $("desiredVelocity").textContent = sample.desired.toFixed(1);
   $("measuredVelocity").textContent = sample.measured.toFixed(1);
   $("motorCurrent").textContent = sample.current.toFixed(2);
@@ -535,6 +563,7 @@ function renderTelemetry(sample) {
   $("zeroIndexStatus").textContent = rotorReferenced
       ? `Zero #${sample.zeroSequence} · ${sample.zeroRejected} bounce rejected`
       : "Waiting for zero index";
+  renderEncoderCalibration();
   updateState(sample.state, sample.faults);
 }
 
@@ -742,6 +771,116 @@ function renderSettings() {
     const value = formatNumber(settings[key], definition.decimals);
     return `<tr><td><code>${key}</code></td><td><button class="parameter-value${editable ? "" : " readonly"}" data-parameter="${key}" ${editable && connected ? "" : "disabled"}>${value}</button></td><td>${definition.description}</td></tr>`;
   }).join("");
+}
+
+function setEncoderCalibrationState(label, appearance) {
+  $("encoderCalibrationState").textContent = label;
+  $("encoderCalibrationState").className = `status-badge ${appearance}`;
+}
+
+function signedCountText(value) {
+  const count = BigInt(value);
+  return count > 0n ? `+${count}` : count.toString();
+}
+
+function renderEncoderCalibration() {
+  const measuring = encoderCalibrationStartCount !== undefined && !encoderCalibrationCandidate;
+  const ready = connected && latestState === 0 && latestEncoderCount !== undefined &&
+                Number.isFinite(settings.cpr) && !encoderCalibrationSavePending;
+  $("encoderConfiguredCpr").textContent = Number.isFinite(settings.cpr)
+      ? formatNumber(settings.cpr, 0)
+      : "—";
+  $("encoderCalibrationLiveCount").textContent = latestEncoderCount === undefined
+      ? "—"
+      : latestEncoderCount.toString();
+  $("encoderCalibrationLiveDelta").textContent = measuring && latestEncoderCount !== undefined
+      ? signedCountText(latestEncoderCount - encoderCalibrationStartCount)
+      : "—";
+  $("encoderCalibrationRevolutions").disabled = measuring || encoderCalibrationSavePending ||
+                                                 Boolean(encoderCalibrationCandidate);
+  $("startEncoderCalibration").disabled = !ready || measuring || Boolean(encoderCalibrationCandidate);
+  $("finishEncoderCalibration").disabled = !ready || !measuring;
+  $("cancelEncoderCalibration").disabled = encoderCalibrationSavePending;
+  $("saveEncoderCalibration").disabled = !ready || !encoderCalibrationCandidate;
+
+  if (!connected) setEncoderCalibrationState("● Disconnected", "offline");
+  else if (encoderCalibrationSavePending) setEncoderCalibrationState("● Saving…", "offline");
+  else if (encoderCalibrationCandidate) setEncoderCalibrationState("● Review result", "online");
+  else if (measuring) setEncoderCalibrationState("● Measuring", "online");
+  else if (latestState !== 0) setEncoderCalibrationState("▲ Disarm required", "fault");
+  else if (latestEncoderCount === undefined) setEncoderCalibrationState("● Waiting for telemetry", "offline");
+  else setEncoderCalibrationState("● Ready", "offline");
+}
+
+function resetEncoderCalibration(label, message) {
+  encoderCalibrationStartCount = undefined;
+  encoderCalibrationTurns = undefined;
+  encoderCalibrationCandidate = undefined;
+  $("encoderCalibrationResult").classList.add("hidden");
+  renderEncoderCalibration();
+  if (label) setEncoderCalibrationState(label, label.startsWith("▲") ? "fault" : "offline");
+  if (message) toast(message);
+}
+
+function startEncoderCalibrationMeasurement() {
+  const turns = Number($("encoderCalibrationRevolutions").value);
+  if (!connected || latestEncoderCount === undefined) return toast("Waiting for live encoder telemetry.");
+  if (latestState !== 0) return toast("Stop and disarm the motor before encoder calibration.");
+  if (!Number.isInteger(turns) || turns < 1 || turns > 10) {
+    return toast("Manual revolutions must be a whole number from 1 to 10.");
+  }
+  encoderCalibrationStartCount = latestEncoderCount;
+  encoderCalibrationTurns = turns;
+  encoderCalibrationCandidate = undefined;
+  $("encoderCalibrationResult").classList.add("hidden");
+  renderEncoderCalibration();
+  toast(`Start count captured. Turn the output shaft exactly ${turns} revolution${turns === 1 ? "" : "s"}.`);
+}
+
+function finishEncoderCalibrationMeasurement() {
+  if (encoderCalibrationStartCount === undefined || latestEncoderCount === undefined) {
+    return toast("Capture the start count first.");
+  }
+  try {
+    encoderCalibrationCandidate = calculateEncoderCalibration(
+        encoderCalibrationStartCount, latestEncoderCount, encoderCalibrationTurns, settings.cpr);
+  } catch (error) {
+    return toast(error.message);
+  }
+  const result = encoderCalibrationCandidate;
+  $("encoderCalibrationStartCount").textContent = encoderCalibrationStartCount.toString();
+  $("encoderCalibrationCountDelta").textContent = signedCountText(result.signedCountDelta);
+  $("encoderCalibrationMeasuredCpr").textContent = formatNumber(result.measuredCountsPerRevolution, 3);
+  $("encoderCalibrationCandidateCpr").textContent = formatNumber(result.candidateCountsPerRevolution, 0);
+  $("encoderCalibrationChange").textContent = Number.isFinite(result.changePercent)
+      ? `${result.changePercent >= 0 ? "+" : ""}${formatNumber(result.changePercent, 2)}%`
+      : "—";
+  $("encoderCalibrationResidual").textContent = `${signedCountText(BigInt(result.roundingResidualCounts))} counts`;
+  $("encoderCalibrationResult").classList.remove("hidden");
+  renderEncoderCalibration();
+  $("encoderCalibrationResult").scrollIntoView({
+    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    block: "nearest"
+  });
+}
+
+async function saveEncoderCalibrationResult() {
+  if (!encoderCalibrationCandidate || encoderCalibrationSavePending) return;
+  if (latestState !== 0) return toast("Motor must be disarmed before saving encoder calibration.");
+  const value = encoderCalibrationCandidate.candidateCountsPerRevolution;
+  const payload = new Uint8Array(7), view = new DataView(payload.buffer);
+  view.setUint16(0, parameterDefinitions.cpr.id, true);
+  view.setFloat32(2, value, true);
+  payload[6] = 1;
+  encoderCalibrationSavePending = true;
+  renderEncoderCalibration();
+  try {
+    await sendFrame(MSG.SET_PARAMETER, payload);
+  } catch (error) {
+    encoderCalibrationSavePending = false;
+    renderEncoderCalibration();
+    toast(`Could not send encoder calibration: ${error.message}`);
+  }
 }
 
 function openParameterEditor(key) {
@@ -1524,6 +1663,10 @@ $("saveConfig").addEventListener("click", () => sendAscii("config save"));
 $("saveDriverDiagnostic").addEventListener("click", async () => { const payload = Uint8Array.of($("driverDiagnosticEnabled").checked ? 1 : 0); await sendFrame(MSG.SET_DRIVER_DIAGNOSTIC, payload); });
 $("saveCurrentSense").addEventListener("click", async () => { const payload = Uint8Array.of($("currentSenseEnabled").checked ? 1 : 0); await sendFrame(MSG.SET_CURRENT_SENSE, payload); });
 $("clearFaultButton").addEventListener("click", async () => { await stopAllManualOutputs(true); await sendFrame(MSG.CLEAR_FAULTS); });
+$("startEncoderCalibration").addEventListener("click", startEncoderCalibrationMeasurement);
+$("finishEncoderCalibration").addEventListener("click", finishEncoderCalibrationMeasurement);
+$("cancelEncoderCalibration").addEventListener("click", () => resetEncoderCalibration("● Measurement discarded"));
+$("saveEncoderCalibration").addEventListener("click", saveEncoderCalibrationResult);
 $("currentCalibrationDutyRange").addEventListener("input", event => setCurrentCalibrationDuty(event.target.value));
 $("currentCalibrationDuty").addEventListener("change", event => setCurrentCalibrationDuty(event.target.value));
 $("startCurrentCalibrationDrive").addEventListener("click", startCurrentCalibrationDrive);
