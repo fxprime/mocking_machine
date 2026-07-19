@@ -102,6 +102,17 @@ void MachineApplication::printStatus() const {
                 telemetry_.desired_velocity_rad_s, telemetry_.measured_velocity_rad_s,
                 motor_.appliedDuty(), telemetry_.current_a, telemetry_.supply_voltage_v,
                 static_cast<long long>(telemetry_.encoder_count));
+  if (telemetry_.zero_index_sequence > 0U) {
+    Serial.printf("rotor=%.3f deg zero_time=%llu us zero_count=%lld zero_sequence=%lu rejected=%lu\r\n",
+                  telemetry_.rotor_position_deg,
+                  static_cast<unsigned long long>(telemetry_.last_zero_timestamp_us),
+                  static_cast<long long>(telemetry_.last_zero_encoder_count),
+                  static_cast<unsigned long>(telemetry_.zero_index_sequence),
+                  static_cast<unsigned long>(telemetry_.zero_index_rejected_count));
+  } else {
+    Serial.printf("rotor=unreferenced zero_sequence=0 rejected=%lu\r\n",
+                  static_cast<unsigned long>(telemetry_.zero_index_rejected_count));
+  }
 }
 
 void MachineApplication::commandStatus(int, char*[]) { printStatus(); }

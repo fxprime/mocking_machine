@@ -8,12 +8,18 @@
 
 namespace mm {
 
+struct ZeroIndexCapture {
+  uint64_t timestamp_us = 0;
+  int64_t encoder_count = 0;
+  uint32_t sequence = 0;
+  uint32_t rejected_count = 0;
+};
+
 class ZeroIndexSensor {
  public:
-  bool begin(uint8_t pin, QuadratureEncoder& encoder);
-  uint64_t timestampUs() const;
-  int64_t encoderCount() const;
-  uint32_t sequence() const;
+  bool begin(uint8_t pin, QuadratureEncoder& encoder, uint32_t minimum_interval_us);
+  void setMinimumIntervalUs(uint32_t minimum_interval_us);
+  ZeroIndexCapture snapshot() const;
 
  private:
   static void IRAM_ATTR interruptThunk(void* argument);
@@ -23,8 +29,9 @@ class ZeroIndexSensor {
   volatile uint64_t timestamp_us_ = 0;
   volatile int64_t encoder_count_ = 0;
   volatile uint32_t sequence_ = 0;
+  volatile uint32_t rejected_count_ = 0;
+  volatile uint32_t minimum_interval_us_ = 0U;
   mutable portMUX_TYPE mutex_ = portMUX_INITIALIZER_UNLOCKED;
 };
 
 }  // namespace mm
-

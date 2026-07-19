@@ -42,6 +42,15 @@
         <article class="metric"><span>Measured velocity</span><strong><b id="measuredVelocity">0.0</b> rad/s</strong></article>
         <article class="metric"><span>Motor current</span><strong><b id="motorCurrent">0.00</b> A</strong></article>
         <article class="metric"><span>Driver VIN</span><strong><b id="supplyVoltage">0.00</b> V</strong></article>
+        <article class="metric rotor-position-metric">
+          <span>Rotor position</span>
+          <div class="rotor-readout">
+            <div id="rotorDial" class="rotor-dial unreferenced" role="img" aria-label="Waiting for the first zero-index detection">
+              <div id="rotorNeedle" class="rotor-needle"></div><div class="rotor-zero-mark">0</div>
+            </div>
+            <div><strong><b id="rotorPosition">—</b>°</strong><small id="zeroIndexStatus">Waiting for zero index</small></div>
+          </div>
+        </article>
       </div>
       <article class="panel chart-panel">
         <div class="panel-heading">

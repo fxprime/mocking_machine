@@ -54,6 +54,12 @@ main { max-width: 1480px; margin: auto; padding: 0 2rem 3rem; }
 .metric { padding: 1rem; }
 .metric span { display: block; color: var(--on-muted); font-size: .85rem; }
 .metric strong { display: block; margin-top: .35rem; font-size: 1.2rem; font-weight: 500; }
+.metric small { display: block; margin-top: .2rem; color: var(--on-muted); font-size: .75rem; }
+.rotor-readout { display: flex; align-items: center; gap: .8rem; margin-top: .45rem; }
+.rotor-dial { position: relative; flex: 0 0 54px; width: 54px; height: 54px; border: 2px solid var(--outline); border-radius: 50%; background: var(--surface); }
+.rotor-dial.unreferenced { opacity: .45; }
+.rotor-needle { position: absolute; left: calc(50% - 1px); bottom: 50%; width: 2px; height: 21px; border-radius: 2px; background: var(--measured); transform: rotate(0deg); transform-origin: 50% 100%; transition: transform .1s linear; }
+.rotor-zero-mark { position: absolute; top: -3px; left: 50%; color: var(--on-muted); font-size: .65rem; line-height: 1; transform: translate(-50%, -100%); }
 .panel { margin-top: 1rem; padding: 1.25rem; }
 .panel p { color: var(--on-muted); max-width: 72ch; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }

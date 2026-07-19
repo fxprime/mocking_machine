@@ -162,7 +162,8 @@ function handleMessage(id, data) {
       estimatorMinCounts: data.byteLength >= 114 ? data.getUint8(105) : 4,
       estimatorMaxWindowUs: data.byteLength >= 114 ? data.getUint32(106, true) : 20000,
       estimatorStaleTimeoutUs: data.byteLength >= 114 ? data.getUint32(110, true) : 100000,
-      currentFilterCutoffHz: data.byteLength >= 118 ? data.getFloat32(114, true) : 20
+      currentFilterCutoffHz: data.byteLength >= 118 ? data.getFloat32(114, true) : 20,
+      zeroIndexMinIntervalUs: data.byteLength >= 122 ? data.getUint32(118, true) : 5000
     };
     renderSettings();
     renderProfiles();
@@ -174,7 +175,7 @@ function handleMessage(id, data) {
     profiles.sort((a, b) => a.id - b.id);
     renderProfiles();
   } else if (id === MSG.TELEMETRY) {
-    const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0 };
+    const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
     samples.push(sample); if (samples.length > 12000) samples.shift(); renderTelemetry(sample);
     renderProfileTestTelemetry(sample);
     renderTuningTelemetry(sample);
@@ -510,6 +511,21 @@ function renderTelemetry(sample) {
   $("supplyVoltage").textContent = sample.supplyVoltage.toFixed(2);
   $("calibrationSupplyVoltage").textContent = sample.supplyVoltage.toFixed(3);
   $("currentDialogMeasured").textContent = sample.current.toFixed(3);
+  const rotorReferenced = sample.zeroSequence > 0 || sample.zeroTime > 0;
+  const rotorPosition = rotorReferenced && Number.isFinite(sample.rotorPosition)
+                          ? ((sample.rotorPosition % 360) + 360) % 360
+                          : Number.NaN;
+  $("rotorPosition").textContent = Number.isFinite(rotorPosition)
+                                     ? rotorPosition.toFixed(1)
+                                     : "—";
+  $("rotorNeedle").style.transform = `rotate(${Number.isFinite(rotorPosition) ? rotorPosition : 0}deg)`;
+  $("rotorDial").classList.toggle("unreferenced", !Number.isFinite(rotorPosition));
+  $("rotorDial").setAttribute("aria-label", Number.isFinite(rotorPosition)
+      ? `Rotor position ${rotorPosition.toFixed(1)} degrees; zero index ${sample.zeroSequence}; ${sample.zeroRejected} rejected bounce edges`
+      : "Waiting for the first zero-index detection");
+  $("zeroIndexStatus").textContent = rotorReferenced
+      ? `Zero #${sample.zeroSequence} · ${sample.zeroRejected} bounce rejected`
+      : "Waiting for zero index";
   updateState(sample.state, sample.faults);
 }
 
@@ -687,6 +703,7 @@ const parameterDefinitions = {
   encoderTimeoutVelocity: { id: 23, decimals: 2, step: 0.1, min: 0.1, max: 10000, description: "Desired-velocity threshold that activates the encoder activity watchdog, in rad/s" },
   currentSenseEnabled: { id: 28, decimals: 0, step: 1, min: 0, max: 1, description: "Enable current protection: 0 = disabled, 1 = enabled" },
   currentFilterCutoffHz: { id: 29, decimals: 1, step: 0.1, min: 0.1, max: 200, description: "First-order current-sense low-pass cutoff in Hz; lower values reduce noise but delay overcurrent detection" },
+  zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between zero-index rising edges in microseconds; closer edges are counted as bounce" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },

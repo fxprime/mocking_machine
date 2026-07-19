@@ -16,6 +16,13 @@
 
 All pins are configurable in `MachineSettings`.
 
+The zero-index input accepts the first rising edge as the rotor reference and captures both
+its microsecond timestamp and the current quadrature count. Later rising edges inside
+`zero_index_min_interval_us` (5,000 µs by default) are treated as sensor bounce. This filter
+does not reset, suppress, or otherwise modify the GPIO32/33 encoder count. At the configured
+150 rad/s maximum, one revolution is about 41.9 ms, so the 5 ms default remains comfortably
+below the expected one-pulse-per-revolution interval.
+
 ## Power wiring
 
 1. Connect the 12 V supply through an appropriately rated fuse and a latching emergency-stop/power contactor to module motor `V+`.

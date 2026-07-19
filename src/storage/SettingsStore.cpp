@@ -39,6 +39,14 @@ struct LegacyEncoderConfigurationV5 {
   uint32_t estimator_max_window_us;
 };
 
+struct LegacyEncoderConfigurationV7 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+  uint32_t estimator_stale_timeout_us;
+};
+
 struct LegacyMotorCharacteristicsV6 {
   float start_duty_forward;
   float start_duty_reverse;
@@ -122,7 +130,7 @@ struct LegacyMachineSettingsV6 {
   VoltageSenseConfiguration supply_voltage;
   SafetyConfiguration safety;
   SerialConfiguration serial;
-  EncoderConfiguration encoder;
+  LegacyEncoderConfigurationV7 encoder;
   CharacterizationConfiguration characterization;
   MachineLoadSetting load_setting;
   uint8_t profile_count;
@@ -140,14 +148,43 @@ struct LegacyPersistedSettingsV6 {
   uint16_t crc;
 };
 
+struct LegacyMachineSettingsV7 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV7 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV7 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV7 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
               "Schema-v4 to v5 migration layout assumption changed");
 static_assert(sizeof(LegacyMachineSettingsV5) + sizeof(float) + sizeof(uint32_t) ==
                   sizeof(LegacyMachineSettingsV6),
               "Schema-v5 to v6 migration layout assumption changed");
-static_assert(sizeof(LegacyMachineSettingsV6) + sizeof(float) == sizeof(MachineSettings),
+static_assert(sizeof(LegacyMachineSettingsV6) + sizeof(float) ==
+                  sizeof(LegacyMachineSettingsV7),
               "Schema-v6 to v7 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV7) + sizeof(uint32_t) == sizeof(MachineSettings),
+              "Schema-v7 to v8 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
                        ControlConfiguration& target) {
@@ -167,6 +204,15 @@ void copyLegacyEncoder(const LegacyEncoderConfigurationV5& source,
   target.direction = source.direction;
   target.estimator_min_counts = source.estimator_min_counts;
   target.estimator_max_window_us = source.estimator_max_window_us;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV7& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+  target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
 }
 
 void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
@@ -243,6 +289,10 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       settings.encoder.estimator_stale_timeout_us <
           settings.encoder.estimator_max_window_us ||
       settings.encoder.estimator_stale_timeout_us > 2000000U ||
+      settings.encoder.zero_index_min_interval_us <
+          EncoderConfiguration::kMinimumZeroIndexMinimumIntervalUs ||
+      settings.encoder.zero_index_min_interval_us >
+          EncoderConfiguration::kMaximumZeroIndexMinimumIntervalUs ||
       settings.safety.encoder_timeout_ms < 50U ||
       settings.safety.encoder_timeout_ms > 10000U ||
       settings.safety.encoder_timeout_velocity_rad_s <= 0.0F ||
@@ -326,6 +376,32 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings = blob.payload;
       loaded = true;
     }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV7)) {
+    LegacyPersistedSettingsV7 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 7U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV6)) {
     LegacyPersistedSettingsV6 blob{};
     const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
@@ -341,7 +417,7 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.supply_voltage = blob.payload.supply_voltage;
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
-      settings.encoder = blob.payload.encoder;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
       settings.characterization = blob.payload.characterization;
       settings.load_setting = blob.payload.load_setting;
       settings.profile_count = blob.payload.profile_count;

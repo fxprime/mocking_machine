@@ -15,6 +15,9 @@ const csv = createTelemetryCsv([{
   zeroTime: 0,
   count: 1505048n,
   zeroCount: 0n,
+  rotorPosition: 270.25,
+  zeroSequence: 3,
+  zeroRejected: 2,
   load: 0,
   state: 2,
   faults: 0
@@ -22,8 +25,9 @@ const csv = createTelemetryCsv([{
 
 const [header, row] = csv.split("\n");
 assert.match(header, /desired_velocity_rad_s,measured_velocity_rad_s/);
+assert.match(header, /rotor_position_deg,last_zero_timestamp_us,encoder_count,last_zero_encoder_count,zero_index_sequence,zero_index_rejected_count/);
 assert.equal(row,
-  "1742528221,0,0.2798,0.0000,-0.024271,0.000444,-0.000096,0.000000,2.2100,12.0733,0,1505048,0,0,2,0");
+  "1742528221,0,0.2798,0.0000,-0.024271,0.000444,-0.000096,0.000000,2.2100,12.0733,270.250,0,1505048,0,3,2,0,2,0");
 assert.doesNotMatch(row, /e-/i);
 
 console.log("CSV export tests passed");

@@ -9,6 +9,7 @@
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
+#include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "profile/VelocityProfile.hpp"
 #include "protocol/Crc16.hpp"
@@ -147,6 +148,21 @@ void test_velocity_estimator_uses_each_control_interval_count_delta() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, estimator.update(1, 7000));
 }
 
+void test_zero_index_debounce_accepts_first_and_filters_close_rises() {
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(100000U, 0U, 5000U));
+  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(102000U, 100000U, 5000U));
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(105000U, 100000U, 5000U));
+}
+
+void test_rotor_position_wraps_from_last_zero_encoder_count() {
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 90.0F,
+                           calculateRotorPositionDegrees(146, 100, 184U, 1));
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 358.043F,
+                           calculateRotorPositionDegrees(99, 100, 184U, 1));
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 270.0F,
+                           calculateRotorPositionDegrees(146, 100, 184U, -1));
+}
+
 void test_sine_profile_stays_one_direction() {
   VelocityProfileConfiguration configuration{};
   configuration.kind = ProfileKind::Sine;
@@ -192,7 +208,9 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(7U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(8U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(EncoderConfiguration::kDefaultZeroIndexMinimumIntervalUs,
+                           settings.encoder.zero_index_min_interval_us);
 }
 
 void test_encoder_watchdog_grants_fresh_motion_demand_timeout() {
@@ -242,6 +260,8 @@ int main(int, char**) {
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
+  RUN_TEST(test_zero_index_debounce_accepts_first_and_filters_close_rises);
+  RUN_TEST(test_rotor_position_wraps_from_last_zero_encoder_count);
   RUN_TEST(test_sine_profile_stays_one_direction);
   RUN_TEST(test_waypoint_profile_interpolates_and_stops_at_duration);
   RUN_TEST(test_vin_divider_nominal_gain);

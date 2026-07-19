@@ -49,7 +49,10 @@ Missed control ticks are never replayed against stale sensor data. The scheduler
 
 - `esp_timer_get_time()` supplies monotonic 64-bit microseconds.
 - Both quadrature channels use CHANGE interrupts and a 16-entry Gray-code transition table.
-- The zero-index interrupt stores both the exact rising-edge timestamp and encoder count.
+- The zero-index interrupt accepts the first rising edge, rejects later edges inside the
+  configurable debounce interval, and atomically stores the accepted timestamp and encoder
+  count. Rejected zero edges never alter quadrature counting. Rotor position is the directed
+  encoder-count difference from that reference, wrapped to 0–360°.
 - The estimator calculates count delta over each actual control interval and then applies the
   configured first-order velocity filter. Encoder edge timestamps remain dedicated to the
   encoder-activity watchdog.

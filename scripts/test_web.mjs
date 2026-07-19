@@ -30,6 +30,12 @@ assert.match(indexSource, /id="cancelCurrentCalibration"/);
 assert.match(indexSource, /id="currentCalibrationWorkspace"/);
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
+assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
+assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
+assert.match(appSource, /rotorPosition:\s*data\.byteLength >= 76 \? data\.getFloat32\(72, true\)/,
+  "GUI must decode the appended rotor position telemetry field");
+assert.match(appSource, /rotorNeedle[\s\S]*rotate\(/,
+  "Rotor indicator must follow the decoded angular position");
 assert.match(indexSource, /id="tuningManualControls"[^>]*\shidden(?:\s|>)/,
   "Manual response-test inputs must start hidden while Stored profile is selected");
 assert.match(appSource, /function renderTuningTestInputMode[\s\S]*profileControls\.hidden = mode !== "profile"[\s\S]*manualControls\.hidden = mode !== "manual"/,

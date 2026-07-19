@@ -87,11 +87,16 @@ struct SerialConfiguration {
 };
 
 struct EncoderConfiguration {
+  static constexpr uint32_t kDefaultZeroIndexMinimumIntervalUs = 5000U;
+  static constexpr uint32_t kMinimumZeroIndexMinimumIntervalUs = 100U;
+  static constexpr uint32_t kMaximumZeroIndexMinimumIntervalUs = 1000000U;
+
   uint32_t counts_per_output_revolution = 184;
   int8_t direction = 1;
   uint8_t estimator_min_counts = 4;
   uint32_t estimator_max_window_us = 20000;
   uint32_t estimator_stale_timeout_us = 100000;
+  uint32_t zero_index_min_interval_us = kDefaultZeroIndexMinimumIntervalUs;
 };
 
 struct CharacterizationConfiguration {
@@ -137,7 +142,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 7;
+  static constexpr uint32_t kSchemaVersion = 8;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};
@@ -160,6 +165,9 @@ struct TelemetrySample {
   uint64_t last_zero_timestamp_us = 0;
   int64_t encoder_count = 0;
   int64_t last_zero_encoder_count = 0;
+  float rotor_position_deg = 0.0F;
+  uint32_t zero_index_sequence = 0;
+  uint32_t zero_index_rejected_count = 0;
   float desired_velocity_rad_s = 0.0F;
   float measured_velocity_rad_s = 0.0F;
   float controller_output = 0.0F;

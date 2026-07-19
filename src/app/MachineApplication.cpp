@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "control/CharacterizationMetrics.hpp"
+#include "control/RotorPosition.hpp"
 
 #ifndef BUILD_VERSION
 #define BUILD_VERSION "development"
@@ -68,6 +69,7 @@ struct SettingsPayload {
   uint32_t estimator_max_window_us;
   uint32_t estimator_stale_timeout_us;
   float current_filter_cutoff_hz;
+  uint32_t zero_index_min_interval_us;
 };
 
 struct TelemetryPayload {
@@ -87,6 +89,9 @@ struct TelemetryPayload {
   float controller_proportional_term;
   float controller_integral_term;
   float controller_derivative_term;
+  float rotor_position_deg;
+  uint32_t zero_index_sequence;
+  uint32_t zero_index_rejected_count;
 };
 
 struct ControllerPayload {
@@ -138,6 +143,7 @@ enum class ParameterId : uint16_t {
   EstimatorStaleTimeoutUs,
   CurrentSenseEnabled,
   CurrentFilterCutoffHz,
+  ZeroIndexMinimumIntervalUs,
 };
 
 struct ParameterPayload {
@@ -222,12 +228,12 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 118U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 122U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
               "Current calibration status payload changed");
-static_assert(sizeof(TelemetryPayload) == 72U, "Update protocol and browser TELEMETRY decoder");
+static_assert(sizeof(TelemetryPayload) == 84U, "Update protocol and browser TELEMETRY decoder");
 static_assert(sizeof(SupplyVoltageCalibrationPayload) == 4U,
               "Supply calibration payload must remain one float");
 static_assert(sizeof(CharacterizationResultPayload) == 16U,
@@ -276,7 +282,8 @@ void MachineApplication::begin() {
   serial_link_.begin(Serial, &MachineApplication::frameThunk, &MachineApplication::lineThunk, this);
 
   encoder_.begin(settings_.pins.encoder_a, settings_.pins.encoder_b);
-  zero_index_.begin(settings_.pins.zero_index, encoder_);
+  zero_index_.begin(settings_.pins.zero_index, encoder_,
+                    settings_.encoder.zero_index_min_interval_us);
   motor_initialized_ = motor_.begin(settings_);
   if (!motor_initialized_) {
     faults_ |= FaultInvalidConfiguration;
@@ -360,9 +367,19 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   const float dt_s = static_cast<float>(scheduled_us - last_control_us_) * 1.0e-6F;
   last_control_us_ = scheduled_us;
   telemetry_.timestamp_us = scheduled_us;
+  const ZeroIndexCapture zero_capture = zero_index_.snapshot();
   telemetry_.encoder_count = encoder_.count();
-  telemetry_.last_zero_timestamp_us = zero_index_.timestampUs();
-  telemetry_.last_zero_encoder_count = zero_index_.encoderCount();
+  telemetry_.last_zero_timestamp_us = zero_capture.timestamp_us;
+  telemetry_.last_zero_encoder_count = zero_capture.encoder_count;
+  telemetry_.zero_index_sequence = zero_capture.sequence;
+  telemetry_.zero_index_rejected_count = zero_capture.rejected_count;
+  telemetry_.rotor_position_deg = zero_capture.sequence == 0U
+                                      ? 0.0F
+                                      : calculateRotorPositionDegrees(
+                                            telemetry_.encoder_count,
+                                            zero_capture.encoder_count,
+                                            settings_.encoder.counts_per_output_revolution,
+                                            settings_.encoder.direction);
   telemetry_.measured_velocity_rad_s = velocity_estimator_.update(
       telemetry_.encoder_count, scheduled_us);
   const float current_sense_voltage_v = motor_.currentSenseVoltage();
@@ -888,6 +905,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.safety.current_sense_enabled = update.value != 0.0F; break;
         case ParameterId::CurrentFilterCutoffHz:
           candidate.motor.current_filter_cutoff_hz = update.value; break;
+        case ParameterId::ZeroIndexMinimumIntervalUs:
+          if (!whole(update.value)) { sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return; }
+          candidate.encoder.zero_index_min_interval_us = static_cast<uint32_t>(update.value); break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -911,6 +931,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       motor_.setCurrentCalibration(settings_.motor.current_gain_a_per_v,
                                    settings_.motor.current_offset_v);
       current_filter_.configure(settings_.motor.current_filter_cutoff_hz);
+      zero_index_.setMinimumIntervalUs(settings_.encoder.zero_index_min_interval_us);
       if (!settings_.safety.current_sense_enabled) {
         faults_ &= ~static_cast<uint32_t>(FaultOverCurrent);
       }
@@ -1260,6 +1281,7 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.encoder.estimator_max_window_us,
       settings_.encoder.estimator_stale_timeout_us,
       settings_.motor.current_filter_cutoff_hz,
+      settings_.encoder.zero_index_min_interval_us,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }
@@ -1316,6 +1338,8 @@ void MachineApplication::sendTelemetry() {
       static_cast<uint8_t>(telemetry_.state),
       telemetry_.controller_proportional_term, telemetry_.controller_integral_term,
       telemetry_.controller_derivative_term,
+      telemetry_.rotor_position_deg, telemetry_.zero_index_sequence,
+      telemetry_.zero_index_rejected_count,
   };
   serial_link_.send(protocol::MessageId::Telemetry, transmit_sequence_++, &payload,
                     sizeof(payload));

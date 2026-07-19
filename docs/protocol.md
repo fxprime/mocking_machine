@@ -61,7 +61,7 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, n
 
 ### SETTINGS payload
 
-`u32 schema, u32 baud, u32 control_period_us, u32 CPR, u16 stream_rate_hz, u16 selected_profile_id, f32 kp, f32 ki, f32 kd, f32 vmax, f32 amax, f32 jmax, f32 imax, f32 max_duty, f32 start_duty_forward, f32 start_duty_reverse, u8 load_setting_id, u8 load_count, i8 motor_direction, u8 stop_mode, f32 supply_divider_gain, f32 supply_input_offset_v, f32 min_supply_voltage_v, f32 max_supply_voltage_v, u8 supply_voltage_pin, f32 current_gain_a_per_v, f32 current_offset_v, u8 current_sense_pin, u8 current_sense_enabled, u8 driver_diagnostic_enabled, u8 driver_diagnostic_pin, u32 encoder_timeout_ms, f32 encoder_timeout_velocity_rad_s, f32 max_feedback_correction, u8 estimator_min_counts, u32 estimator_max_window_us, u32 estimator_stale_timeout_us, f32 current_filter_cutoff_hz`
+`u32 schema, u32 baud, u32 control_period_us, u32 CPR, u16 stream_rate_hz, u16 selected_profile_id, f32 kp, f32 ki, f32 kd, f32 vmax, f32 amax, f32 jmax, f32 imax, f32 max_duty, f32 start_duty_forward, f32 start_duty_reverse, u8 load_setting_id, u8 load_count, i8 motor_direction, u8 stop_mode, f32 supply_divider_gain, f32 supply_input_offset_v, f32 min_supply_voltage_v, f32 max_supply_voltage_v, u8 supply_voltage_pin, f32 current_gain_a_per_v, f32 current_offset_v, u8 current_sense_pin, u8 current_sense_enabled, u8 driver_diagnostic_enabled, u8 driver_diagnostic_pin, u32 encoder_timeout_ms, f32 encoder_timeout_velocity_rad_s, f32 max_feedback_correction, u8 estimator_min_counts, u32 estimator_max_window_us, u32 estimator_stale_timeout_us, f32 current_filter_cutoff_hz, u32 zero_index_min_interval_us`
 
 The feedback-correction and three estimator-tuning fields are retained for packet/NVS
 compatibility but are ignored while the classic count-delta velocity path is active.
@@ -72,7 +72,13 @@ The encoder watchdog begins its timeout window when desired velocity first excee
 
 `SET_CURRENT_SENSE` carries `u8 enabled` (`0` or `1`). Current telemetry and calibration remain active when disabled, but overcurrent fault detection is bypassed. Protection is disabled by default and should only be enabled after the CS circuit is connected, filtered, and calibrated.
 
-The parameter table also exposes `current_sense_enabled` as parameter 28 and `current_filter_cutoff_hz` as parameter 29. The cutoff accepts 0.1–200 Hz and controls a first-order low-pass filter evaluated at the control-loop rate. Filtered current is used for both telemetry and software overcurrent detection, so reducing the cutoff also increases protection delay. Hardware current limiting and a correctly sized fuse remain mandatory.
+The parameter table also exposes `current_sense_enabled` as parameter 28,
+`current_filter_cutoff_hz` as parameter 29, and `zero_index_min_interval_us` as parameter 30.
+The current cutoff accepts 0.1–200 Hz. The zero-index interval accepts 100–1,000,000 µs;
+its default is 5,000 µs. Rising edges closer than this to the last accepted zero edge are
+ignored as bounce and counted in telemetry. Filtered current is used for both telemetry and
+software overcurrent detection, so reducing the cutoff also increases protection delay.
+Hardware current limiting and a correctly sized fuse remain mandatory.
 
 `SET_PARAMETER` carries `u16 parameter_id, f32 value, u8 persist`. It is accepted only while disarmed. Firmware applies the value to a copy of the complete settings structure, validates all cross-parameter constraints, optionally saves it, reconfigures the affected runtime modules, and returns ACK followed by SETTINGS. Parameter IDs are defined by the firmware/browser parameter table; unknown IDs are rejected.
 
@@ -92,9 +98,9 @@ The parameter table also exposes `current_sense_enabled` as parameter 28 and `cu
 
 ### TELEMETRY payload
 
-`u64 timestamp_us, u64 last_zero_timestamp_us, i64 encoder_count, i64 last_zero_encoder_count, f32 desired_rad_s, f32 measured_rad_s, f32 controller_output, f32 current_a, f32 supply_voltage_v, u32 faults, u16 profile_id, u8 load_setting_id, u8 state, f32 controller_p_delta, f32 controller_i_delta, f32 controller_d_delta`
+`u64 timestamp_us, u64 last_zero_timestamp_us, i64 encoder_count, i64 last_zero_encoder_count, f32 desired_rad_s, f32 measured_rad_s, f32 controller_output, f32 current_a, f32 supply_voltage_v, u32 faults, u16 profile_id, u8 load_setting_id, u8 state, f32 controller_p_delta, f32 controller_i_delta, f32 controller_d_delta, f32 rotor_position_deg, u32 zero_index_sequence, u32 zero_index_rejected_count`
 
-The final three fields are the proportional, integral, and derivative contributions to the latest incremental-controller output update. They are zero when velocity control is inactive. `controller_output` is the saturated total actuator command. The fields are appended after the original 60-byte payload so a host can decode telemetry from older firmware by payload length.
+The controller fields are the proportional, integral, and derivative contributions to the latest incremental-controller output update. They are zero when velocity control is inactive. `controller_output` is the saturated total actuator command. Rotor position is appended at byte 72 and is valid after `zero_index_sequence` becomes nonzero. It is calculated from the current encoder count relative to the last accepted zero count, modulo CPR and adjusted by encoder direction. `zero_index_rejected_count` counts rising edges rejected by the configured minimum interval. Hosts can remain backward compatible by checking payload length.
 
 `SUPPLY_VOLTAGE_CALIBRATION` carries one `f32 reference_voltage_v`. Firmware averages 64 raw GPIO36 ADC readings, calculates the divider gain, applies it immediately, saves it to Preferences, and returns ACK followed by SETTINGS.
 
