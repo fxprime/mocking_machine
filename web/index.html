@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mocking Machine Console</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">ROTATING MACHINERY TEST RIG</div>
+      <h1>Mocking Machine</h1>
+    </div>
+    <div class="connection-controls">
+      <span id="connectionState" class="status-badge offline">● Disconnected</span>
+      <label>Baud <select id="baud"><option>115200</option><option>230400</option><option>460800</option><option>921600</option></select></label>
+      <button id="connectButton" class="primary">Connect</button>
+      <button id="stopButton" class="danger" disabled>■ Emergency stop</button>
+    </div>
+  </header>
+
+  <main>
+    <nav class="tabs" aria-label="Console sections">
+      <button class="tab active" data-page="overview">Overview</button>
+      <button class="tab" data-page="tuning">PID tuning</button>
+      <button class="tab" data-page="profiles">Profiles</button>
+      <button class="tab" data-page="motorTest">Motor test</button>
+      <button class="tab" data-page="parameters">Parameters</button>
+      <button class="tab" data-page="calibration">Calibration</button>
+      <button class="tab" data-page="terminal">Terminal</button>
+    </nav>
+
+    <section id="overview" class="page active">
+      <div id="faultBanner" class="fault-banner with-action hidden" role="alert">
+        <span>▲ Firmware fault: <span id="faultText"></span></span>
+        <button id="clearFaultButton">Clear / recheck faults</button>
+      </div>
+      <div class="metric-grid">
+        <article class="metric"><span>Machine state</span><strong id="machineState">DISCONNECTED</strong></article>
+        <article class="metric"><span>Desired velocity</span><strong><b id="desiredVelocity">0.0</b> rad/s</strong></article>
+        <article class="metric"><span>Measured velocity</span><strong><b id="measuredVelocity">0.0</b> rad/s</strong></article>
+        <article class="metric"><span>Motor current</span><strong><b id="motorCurrent">0.00</b> A</strong></article>
+        <article class="metric"><span>Driver VIN</span><strong><b id="supplyVoltage">0.00</b> V</strong></article>
+      </div>
+      <article class="panel chart-panel">
+        <div class="panel-heading">
+          <div><h2>Velocity response</h2><p>Desired and measured angular velocity</p></div>
+          <button id="exportButton" disabled>Export CSV</button>
+        </div>
+        <canvas id="responseChart" width="1200" height="380" aria-label="Velocity response chart"></canvas>
+        <div class="legend"><span class="desired-line">— Desired</span><span class="measured-line">— Measured</span></div>
+      </article>
+      <div class="action-row">
+        <button id="armButton" disabled>Arm output</button>
+        <button id="runButton" class="primary" disabled>Run selected profile</button>
+        <span class="hint">Starting the data stream never starts the motor.</span>
+      </div>
+    </section>
+
+    <section id="motorTest" class="page">
+      <article class="panel narrow motor-test-panel">
+        <div class="panel-heading">
+          <div><h2>Direct motor drive</h2><p>Bench-test direction and raw PWM without velocity control or deadband compensation.</p></div>
+          <span id="motorTestState" class="status-badge offline">● Stopped</span>
+        </div>
+        <div class="fault-banner">▲ Remove imbalance weights, close the rotor guard, and keep the emergency stop accessible.</div>
+        <fieldset>
+          <legend>Direction</legend>
+          <label class="radio-option"><input type="radio" name="motorTestDirection" value="1" checked> Forward</label>
+          <label class="radio-option"><input type="radio" name="motorTestDirection" value="-1"> Reverse</label>
+        </fieldset>
+        <div class="pwm-control">
+          <label for="motorTestDutyRange">Raw PWM duty</label>
+          <input id="motorTestDutyRange" type="range" min="0.01" max="0.90" step="0.01" value="0.10">
+          <label class="duty-number"><input id="motorTestDuty" type="number" min="0.01" max="0.90" step="0.01" value="0.10"> <span>10%</span></label>
+        </div>
+        <p class="hint">Firmware clamps PWM to the configured maximum and stops automatically if keepalive commands cease.</p>
+        <div class="action-row">
+          <button id="startMotorTest" class="danger" disabled>Start raw output</button>
+          <button id="stopMotorTest" disabled>Stop and disarm</button>
+        </div>
+      </article>
+    </section>
+
+    <section id="tuning" class="page">
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Incremental controller gains</h2><p>The firmware applies Δu = Kp·Δe + Ki·Ts·e + Kd·Δ²e/Ts with saturation protection.</p></div><span id="gainState" class="status-badge offline">● Firmware values</span></div>
+        <div class="form-grid">
+          <label>Kp <input id="kp" type="number" min="0" step="0.001"></label>
+          <label>Ki <input id="ki" type="number" min="0" step="0.001"></label>
+          <label>Kd <input id="kd" type="number" min="0" step="0.001"></label>
+        </div>
+        <div class="action-row"><button id="loadGains" disabled>Apply gains for test</button><button id="saveGains" class="primary" disabled>Save tested gains</button></div>
+        <p class="hint">Typing only creates a draft. Apply loads gains into RAM; Save writes the tested values to Preferences.</p>
+      </article>
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Response test</h2><p>Run a stored velocity profile or a constrained manual velocity step.</p></div><span id="tuningTestState" class="status-badge offline">● Ready</span></div>
+        <fieldset>
+          <legend>Test input</legend>
+          <label class="radio-option"><input type="radio" name="tuningTestMode" value="profile" checked> Stored profile</label>
+          <label class="radio-option"><input type="radio" name="tuningTestMode" value="manual"> Manual velocity step</label>
+        </fieldset>
+        <div id="tuningProfileControls" class="form-grid tuning-source-controls">
+          <label>Profile <select id="tuningProfileSelect"></select></label>
+        </div>
+        <div id="tuningManualControls" class="form-grid tuning-source-controls hidden">
+          <label>Target velocity (rad/s) <input id="tuningManualVelocity" type="number" min="0.1" step="0.1" value="20"></label>
+          <label>Run time (s) <input id="tuningManualDuration" type="number" min="0.1" max="3600" step="0.1" value="5"></label>
+        </div>
+        <div class="action-row"><button id="startTuningTest" class="danger" disabled>Run response test</button><button id="stopTuningTest" disabled>Stop and disarm</button></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Velocity tracking</h2><p id="tuningResultSummary">Run a test to capture desired and measured velocity.</p></div></div>
+        <div class="metric-grid tuning-metrics">
+          <article class="metric"><span>Peak velocity</span><strong><b id="tuningPeakVelocity">—</b> rad/s</strong></article>
+          <article class="metric"><span>Overshoot</span><strong><b id="tuningOvershoot">—</b>%</strong></article>
+          <article class="metric"><span>Rise time (10–90%)</span><strong><b id="tuningRiseTime">—</b> s</strong></article>
+          <article class="metric"><span>Settling time (±5%)</span><strong><b id="tuningSettlingTime">—</b> s</strong></article>
+        </div>
+        <canvas id="tuningChart" width="1200" height="380" aria-label="PID tuning desired and measured velocity response"></canvas>
+        <div class="legend"><span class="desired-line">— Desired</span><span class="measured-line">— Measured</span></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Estimated step response</h2><p>Closed-loop target→actual response estimated with overlapping Hann-window FFTs, regularized Wiener transfer estimates, inverse FFT, and impulse integration.</p></div><span id="stepEstimateState" class="status-badge offline">● No estimate</span></div>
+        <div class="form-grid estimator-controls">
+          <label>FFT window <select id="stepFftWindow"><option value="0">Auto</option><option value="64">64 samples</option><option value="128">128 samples</option><option value="256">256 samples</option><option value="512">512 samples</option><option value="1024">1024 samples</option></select></label>
+          <label>Response horizon (s) <input id="stepResponseDuration" type="number" min="0.05" max="5" step="0.05" value="0.5"></label>
+          <label>PIDReview noise factor <input id="stepRegularization" type="number" min="0.000001" max="100" step="0.1" value="1"></label>
+          <label>Noise cutoff (Hz) <input id="stepCutoffHz" type="number" min="0.1" max="1000" step="0.1" value="25"></label>
+          <label>Minimum excitation (rad/s) <input id="stepMinimumExcitation" type="number" min="0" max="1000" step="0.01" value="0.35"></label>
+        </div>
+        <div class="metric-grid estimator-metrics">
+          <article class="metric"><span>Resampled rate</span><strong><b id="stepEstimateRate">—</b> Hz</strong></article>
+          <article class="metric"><span>FFT window</span><strong><b id="stepEstimateWindow">—</b> samples</strong></article>
+          <article class="metric"><span>Accepted windows</span><strong><b id="stepEstimateWindows">—</b></strong></article>
+        </div>
+        <p id="stepEstimateMessage" class="notice">Run a response test to calculate an estimate.</p>
+        <canvas id="estimatedStepChart" width="1200" height="380" aria-label="Wiener estimated closed-loop unit step response"></canvas>
+        <div class="legend"><span class="estimated-step-line">— Mean estimate</span><span class="unity-line">┄ Unity reference</span></div>
+        <p class="hint">A varying profile such as multisine, chirp, or PRBS gives a more reliable estimate than a mostly constant target.</p>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Controller output components</h2><p>P, I, and D are the latest incremental contributions (Δu); Total is the saturated accumulated motor command. Each visible signal has an independent auto-scaled Y-axis.</p></div><span class="status-badge online">Independent axes</span></div>
+        <fieldset class="chart-toggle-group">
+          <legend>Visible signals</legend>
+          <label class="checkbox-option p-term-line"><input id="showTuningP" type="checkbox" checked> P contribution</label>
+          <label class="checkbox-option i-term-line"><input id="showTuningI" type="checkbox" checked> I contribution</label>
+          <label class="checkbox-option d-term-line"><input id="showTuningD" type="checkbox" checked> D contribution</label>
+          <label class="checkbox-option total-output-line"><input id="showTuningTotal" type="checkbox" checked> Total output</label>
+        </fieldset>
+        <canvas id="pidOutputChart" width="1200" height="520" aria-label="Incremental P I D contributions and total controller output in independently scaled lanes"></canvas>
+      </article>
+    </section>
+
+    <section id="profiles" class="page">
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Velocity profiles</h2><p>Firmware validates direction, velocity, acceleration, and jerk.</p></div></div>
+        <table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="profileRows"><tr><td colspan="6">Connect to load firmware profiles.</td></tr></tbody></table>
+        <p class="notice">Profile changes are checked against the velocity and acceleration limits before firmware validation.</p>
+      </article>
+      <article id="profileTestProgress" class="panel chart-panel hidden" aria-live="polite">
+        <div class="panel-heading">
+          <div><h2>Profile test</h2><p id="profileTestStage">Preparing profile…</p></div>
+          <span id="profileTestState" class="status-badge offline">● Preparing</span>
+        </div>
+        <div class="metric-grid compact-metrics profile-test-metrics">
+          <article class="metric"><span>Desired velocity</span><strong><b id="profileTestDesired">0.00</b> rad/s</strong></article>
+          <article class="metric"><span>Measured velocity</span><strong><b id="profileTestMeasured">0.00</b> rad/s</strong></article>
+          <article class="metric"><span>Controller output</span><strong><b id="profileTestOutput">0.0</b>%</strong></article>
+        </div>
+        <canvas id="profileTestChart" width="1200" height="300" aria-label="Live profile-test desired and measured velocity graph"></canvas>
+        <div class="legend"><span class="desired-line">— Desired</span><span class="measured-line">— Measured</span></div>
+        <div class="action-row"><button id="stopProfileTest" class="danger" disabled>Stop and disarm</button></div>
+      </article>
+    </section>
+
+    <section id="parameters" class="page">
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Current-sense protection</h2><p>Telemetry remains available when protection is disabled. Enable the trip only after the CS circuit is connected, filtered, and calibrated.</p></div></div>
+        <label class="checkbox-option"><input id="currentSenseEnabled" type="checkbox"> Stop on measured current above the configured limit</label>
+        <button id="saveCurrentSense" disabled>Apply and save current protection</button>
+      </article>
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Driver fault input</h2><p>Enable only when EN/DIAG is connected to GPIO35 through suitable 5 V-to-3.3 V protection.</p></div></div>
+        <label class="checkbox-option"><input id="driverDiagnosticEnabled" type="checkbox"> Monitor EN/DIAG and stop on an active-low fault</label>
+        <button id="saveDriverDiagnostic" disabled>Apply and save diagnostic setting</button>
+      </article>
+      <article class="panel">
+        <div class="panel-heading"><div><h2>Machine parameters</h2><p>Values shown here are fetched from this firmware.</p></div><button id="saveConfig" disabled>Save current values</button></div>
+        <table><thead><tr><th>Parameter</th><th>Current value</th><th>Description</th></tr></thead><tbody id="parameterRows"><tr><td colspan="3">Connect to load firmware parameters.</td></tr></tbody></table>
+      </article>
+    </section>
+
+    <section id="calibration" class="page">
+      <article id="currentCalibrationWorkspace" class="panel">
+        <div class="panel-heading"><div><h2>Two-point current calibration</h2><p>Capture zero current, run the motor from this workspace, then capture a higher-current point. No calibration value is applied until Save.</p></div><span id="currentCalibrationState" class="status-badge offline">● No points</span></div>
+        <div class="fault-banner">▲ Remove imbalance weights, close the rotor guard, connect a trusted current meter, and keep the emergency stop accessible.</div>
+        <div class="metric-grid calibration-metrics">
+          <article class="metric"><span>Live filtered current</span><strong><b id="currentDialogMeasured">0.000</b> A</strong></article>
+          <article class="metric"><span>Calibration drive</span><strong id="currentCalibrationDriveState">■ Stopped</strong></article>
+        </div>
+        <fieldset class="calibration-drive-controls">
+          <legend>Calibration motor drive</legend>
+          <div class="pwm-control">
+            <label for="currentCalibrationDutyRange">Raw PWM duty</label>
+            <input id="currentCalibrationDutyRange" type="range" min="0.01" max="0.90" step="0.01" value="0.10">
+            <label class="duty-number"><input id="currentCalibrationDuty" type="number" min="0.01" max="0.90" step="0.01" value="0.10"> <span>10%</span></label>
+          </div>
+          <div class="action-row">
+            <button id="startCurrentCalibrationDrive" type="button" class="danger" disabled>Start calibration motor</button>
+            <button id="stopCurrentCalibrationDrive" type="button" disabled>Stop and disarm</button>
+          </div>
+        </fieldset>
+        <div class="calibration-point-grid">
+          <fieldset>
+            <legend>1 — Zero / low current</legend>
+            <label>Meter reference (A)<input id="currentReferencePoint1" type="number" min="0" max="50" step="0.001" value="0.000" inputmode="decimal"></label>
+            <div class="captured-reading"><span>Captured CS voltage</span><strong><span id="currentPoint1Voltage">—</span> V</strong></div>
+            <button id="captureCurrentPoint1" type="button" disabled>Capture point 1</button>
+          </fieldset>
+          <fieldset>
+            <legend>2 — Higher current</legend>
+            <label>Meter reference (A)<input id="currentReferencePoint2" type="number" min="0" max="50" step="0.001" value="1.000" inputmode="decimal"></label>
+            <div class="captured-reading"><span>Captured CS voltage</span><strong><span id="currentPoint2Voltage">—</span> V</strong></div>
+            <button id="captureCurrentPoint2" type="button" disabled>Capture point 2</button>
+          </fieldset>
+        </div>
+        <section id="currentCalibrationResult" class="hidden" aria-live="polite">
+          <h2>Candidate calibration</h2>
+          <dl class="result-grid">
+            <div><dt>Gain</dt><dd><span id="currentCandidateGain">—</span> A/V</dd></div>
+            <div><dt>Offset</dt><dd><span id="currentCandidateOffset">—</span> V</dd></div>
+          </dl>
+          <p class="notice">Not applied yet. Save stops and disarms the motor before applying these values.</p>
+        </section>
+        <div class="dialog-actions calibration-actions">
+          <button id="resetCurrentCalibration" type="button" disabled>Reset points</button>
+          <button id="cancelCurrentCalibration" type="button" disabled>Cancel calibration</button>
+          <button id="saveCurrentCalibration" type="button" class="primary" disabled>Apply and save</button>
+        </div>
+      </article>
+      <div class="two-column">
+        <article class="panel"><h2>Motor characterization</h2><p>Remove every imbalance weight and disconnect the machine load. The routine reverses and reaches configured maximum duty.</p>
+          <button id="characterizeButton" class="warning" disabled>Start unloaded characterization</button></article>
+        <article class="panel"><h2>Driver input voltage</h2><p>Calibrate the GPIO36 reading for the 6.8 kΩ / 1 kΩ divider against a trusted multimeter.</p>
+          <p>Live reading: <strong><span id="calibrationSupplyVoltage">0.000</span> V</strong></p>
+          <button id="openVinCalibration" disabled>Calibrate VIN measurement</button></article>
+      </div>
+      <article id="characterizationProgress" class="panel chart-panel hidden" aria-live="polite">
+        <div class="panel-heading">
+          <div><h2>Motor characterization running</h2><p id="characterizationStageText">Preparing test…</p></div>
+          <span id="characterizationRunState" class="status-badge online">● Running</span>
+        </div>
+        <div class="metric-grid compact-metrics">
+          <article class="metric"><span>Measured velocity</span><strong><b id="characterizationVelocity">0.00</b> rad/s</strong></article>
+          <article class="metric"><span>Applied PWM</span><strong><b id="characterizationDuty">0.0</b>%</strong></article>
+        </div>
+        <canvas id="characterizationChart" width="1200" height="300" aria-label="Live characterization velocity graph"></canvas>
+        <div class="legend"><span class="measured-line">— Signed measured velocity</span></div>
+        <div class="action-row"><button id="abortCharacterization" class="danger" disabled>Abort and disarm</button></div>
+      </article>
+    </section>
+
+    <section id="terminal" class="page">
+      <article class="panel terminal-panel"><div class="panel-heading"><div><h2>Debug terminal</h2><p>Uses the same static command registry as firmware help.</p></div><button id="clearTerminal">Clear</button></div>
+        <pre id="terminalOutput" aria-live="polite"></pre>
+        <form id="terminalForm"><label for="terminalInput">Command</label><div class="terminal-input"><input id="terminalInput" autocomplete="off" placeholder="status"><button disabled id="sendTerminal">Send</button></div></form>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="safetyDialog">
+    <form method="dialog"><h2>Confirm physical actuation</h2><p id="safetyMessage"></p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="confirm" class="danger">I have made the rig safe</button></div></form>
+  </dialog>
+  <dialog id="vinCalibrationDialog">
+    <form method="dialog" id="vinCalibrationForm">
+      <h2>Calibrate driver VIN</h2>
+      <p>Measure VIN at the driver power terminals with a trusted multimeter. Firmware will average 64 ADC readings and calculate the actual divider gain.</p>
+      <div class="calibration-reading"><span>Firmware reading</span><strong><span id="vinDialogMeasured">0.000</span> V</strong></div>
+      <label>Multimeter reference voltage (V)
+        <input id="vinReferenceVoltage" type="number" min="0.1" max="20" step="0.001" required inputmode="decimal">
+      </label>
+      <p class="hint">Nominal divider gain: 7.8. Calibration is saved in this device’s Preferences.</p>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button id="calibrateVin" value="confirm" class="primary">Calibrate and save</button></div>
+    </form>
+  </dialog>
+  <dialog id="characterizationResultDialog" class="review-dialog">
+    <form method="dialog" id="characterizationResultForm">
+      <h2>Review motor characterization</h2>
+      <p>The test completed and the motor is disarmed. These candidate values have not been applied or saved.</p>
+      <dl class="result-grid">
+        <div><dt>Forward breakaway PWM</dt><dd id="resultStartDutyForward">—</dd></div>
+        <div><dt>Reverse breakaway PWM</dt><dd id="resultStartDutyReverse">—</dd></div>
+        <div><dt>Maximum forward velocity</dt><dd><span id="resultMaxVelocityForward">—</span> rad/s <small id="resultMaxRpmForward"></small></dd></div>
+        <div><dt>Maximum reverse velocity</dt><dd><span id="resultMaxVelocityReverse">—</span> rad/s <small id="resultMaxRpmReverse"></small></dd></div>
+      </dl>
+      <p class="hint">Save applies these values immediately and writes them to this device’s Preferences. Discard keeps the previous characteristics.</p>
+      <div class="dialog-actions"><button id="discardCharacterization" value="discard">Discard result</button><button id="saveCharacterization" value="save" class="primary">Apply and save</button></div>
+    </form>
+  </dialog>
+  <dialog id="profileEditorDialog" class="profile-dialog">
+    <form method="dialog" id="profileEditorForm">
+      <div class="panel-heading">
+        <div><h2>Edit velocity profile</h2><p>Click the graph to add a waypoint. Drag a point to adjust it; select and remove non-end points.</p></div>
+        <span id="profileFeasibility" class="status-badge online">✓ Feasible</span>
+      </div>
+      <div class="profile-form-grid">
+        <label>Name <input id="profileName" maxlength="15" required></label>
+        <label>Run time (s) <input id="profileDuration" type="number" min="0.1" max="3600" step="0.1" required inputmode="decimal"></label>
+      </div>
+      <div class="constraint-strip" aria-label="Active machine constraints">
+        <div><span>Max velocity</span><strong><b id="profileLimitVelocity">—</b> rad/s</strong></div>
+        <div><span>Max acceleration</span><strong><b id="profileLimitAcceleration">—</b> rad/s²</strong></div>
+        <div><span>Max jerk</span><strong><b id="profileLimitJerk">—</b> rad/s³</strong></div>
+        <div><span>Waypoints</span><strong><b id="profilePointCount">0</b> / 16</strong></div>
+      </div>
+      <canvas id="profileEditorChart" width="1100" height="420" tabindex="0" aria-label="Editable velocity profile graph. Arrow keys move the selected waypoint."></canvas>
+      <div class="legend"><span class="desired-line">— Requested waypoints</span><span class="measured-line">— Jerk-limited preview</span></div>
+      <p id="profileConstraintMessage" class="hint">The firmware applies the same acceleration and jerk limits during the run.</p>
+      <p id="profileRunCommandStatus" class="notice hidden" role="status">Preparing test…</p>
+      <fieldset class="point-editor">
+        <legend>Selected waypoint</legend>
+        <label>Time (s) <input id="profilePointTime" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label>Velocity (rad/s) <input id="profilePointVelocity" type="number" min="0" step="0.1" inputmode="decimal"></label>
+        <button id="addProfilePoint" type="button">Add midpoint</button>
+        <button id="removeProfilePoint" type="button">Remove point</button>
+      </fieldset>
+      <div class="dialog-actions profile-actions">
+        <button value="cancel">Cancel</button>
+        <button id="saveProfile" type="button">Save profile</button>
+        <button id="runProfileTest" type="button" class="danger">Run profile test</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="parameterEditorDialog">
+    <form method="dialog" id="parameterEditorForm">
+      <h2>Edit parameter</h2>
+      <p><code id="parameterEditorName"></code></p>
+      <p id="parameterEditorDescription" class="hint"></p>
+      <label>Value <input id="parameterEditorValue" type="number" required inputmode="decimal"></label>
+      <p id="parameterEditorRange" class="hint"></p>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button value="save" class="primary">Apply and save</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

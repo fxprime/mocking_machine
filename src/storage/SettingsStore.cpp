@@ -1,0 +1,458 @@
+#include "storage/SettingsStore.hpp"
+
+#include <Preferences.h>
+
+#include <cmath>
+#include <cstring>
+
+#include "protocol/Crc16.hpp"
+
+namespace mm {
+namespace {
+constexpr uint32_t kSettingsMagic = 0x4D4D4346U;  // MMCF
+constexpr char kNamespace[] = "mmachine";
+constexpr char kBlobKey[] = "settings";
+
+struct PersistedSettings {
+  uint32_t magic = kSettingsMagic;
+  uint32_t schema_version = MachineSettings::kSchemaVersion;
+  uint32_t payload_size = sizeof(MachineSettings);
+  MachineSettings payload{};
+  uint16_t crc = 0;
+};
+
+struct LegacyControlConfigurationV5 {
+  float kp;
+  float ki;
+  float kd;
+  float output_min;
+  float output_max;
+  float error_deadband_rad_s;
+  float velocity_filter_tau_s;
+  uint32_t period_us;
+};
+
+struct LegacyEncoderConfigurationV5 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+};
+
+struct LegacyMotorCharacteristicsV6 {
+  float start_duty_forward;
+  float start_duty_reverse;
+  float max_velocity_forward_rad_s;
+  float max_velocity_reverse_rad_s;
+  float current_gain_a_per_v;
+  float current_offset_v;
+};
+
+struct LegacySafetyConfigurationV4 {
+  float max_velocity_rad_s;
+  float max_acceleration_rad_s2;
+  float max_jerk_rad_s3;
+  float max_current_a;
+  float min_supply_voltage_v;
+  float max_supply_voltage_v;
+  float max_duty;
+  uint32_t command_timeout_ms;
+  uint32_t encoder_timeout_ms;
+  bool current_sense_enabled;
+  bool driver_diagnostic_enabled;
+};
+
+struct LegacyMachineSettingsV4 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  LegacyControlConfigurationV5 control;
+  LegacyMotorCharacteristicsV6 motor;
+  VoltageSenseConfiguration supply_voltage;
+  LegacySafetyConfigurationV4 safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV5 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV4 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV4 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV5 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  LegacyControlConfigurationV5 control;
+  LegacyMotorCharacteristicsV6 motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV5 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV5 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV5 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV6 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  LegacyMotorCharacteristicsV6 motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV6 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV6 payload;
+  uint16_t crc;
+};
+
+static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
+                  sizeof(LegacyMachineSettingsV5),
+              "Schema-v4 to v5 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV5) + sizeof(float) + sizeof(uint32_t) ==
+                  sizeof(LegacyMachineSettingsV6),
+              "Schema-v5 to v6 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV6) + sizeof(float) == sizeof(MachineSettings),
+              "Schema-v6 to v7 migration layout assumption changed");
+
+void copyLegacyControl(const LegacyControlConfigurationV5& source,
+                       ControlConfiguration& target) {
+  target.kp = source.kp;
+  target.ki = source.ki;
+  target.kd = source.kd;
+  target.output_min = source.output_min;
+  target.output_max = source.output_max;
+  target.error_deadband_rad_s = source.error_deadband_rad_s;
+  target.velocity_filter_tau_s = source.velocity_filter_tau_s;
+  target.period_us = source.period_us;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV5& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+}
+
+void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
+                     MotorCharacteristics& target) {
+  target.start_duty_forward = source.start_duty_forward;
+  target.start_duty_reverse = source.start_duty_reverse;
+  target.max_velocity_forward_rad_s = source.max_velocity_forward_rad_s;
+  target.max_velocity_reverse_rad_s = source.max_velocity_reverse_rad_s;
+  target.current_gain_a_per_v = source.current_gain_a_per_v;
+  target.current_offset_v = source.current_offset_v;
+}
+}
+
+MachineSettings SettingsStore::defaults() {
+  MachineSettings settings{};
+  settings.profiles[0].profile_id = 0;
+  return settings;
+}
+
+bool SettingsStore::validate(const MachineSettings& settings) {
+  const auto finite = [](const float value) { return std::isfinite(value); };
+  if (settings.schema_version != MachineSettings::kSchemaVersion ||
+      settings.control.period_us < 1000U || settings.control.period_us > 20000U ||
+      settings.encoder.counts_per_output_revolution == 0U ||
+      (settings.encoder.direction != -1 && settings.encoder.direction != 1) ||
+      (settings.motor_direction != -1 && settings.motor_direction != 1) ||
+      settings.profile_count == 0U || settings.profile_count > kMaximumProfiles ||
+      settings.load_setting.count > kMaximumLoads || settings.serial.stream_rate_hz == 0U ||
+      settings.serial.stream_rate_hz > 500U || settings.serial.baud < 9600U ||
+      settings.serial.baud > 921600U) {
+    return false;
+  }
+  if (!finite(settings.control.kp) || !finite(settings.control.ki) ||
+      !finite(settings.control.kd) || !finite(settings.safety.max_velocity_rad_s) ||
+      !finite(settings.control.max_feedback_correction) ||
+      !finite(settings.safety.max_acceleration_rad_s2) ||
+      !finite(settings.safety.max_jerk_rad_s3) || !finite(settings.safety.max_current_a) ||
+      !finite(settings.safety.max_duty) || !finite(settings.motor.start_duty_forward) ||
+      !finite(settings.motor.start_duty_reverse) ||
+      !finite(settings.motor.current_gain_a_per_v) ||
+      !finite(settings.motor.current_offset_v) ||
+      !finite(settings.motor.current_filter_cutoff_hz) ||
+      !finite(settings.safety.encoder_timeout_velocity_rad_s) ||
+      !finite(settings.supply_voltage.divider_gain) ||
+      !finite(settings.supply_voltage.input_offset_v) ||
+      !finite(settings.safety.min_supply_voltage_v) ||
+      !finite(settings.safety.max_supply_voltage_v) ||
+      settings.safety.max_velocity_rad_s <= 0.0F ||
+      settings.safety.max_acceleration_rad_s2 <= 0.0F ||
+      settings.control.kp < 0.0F || settings.control.ki < 0.0F ||
+      settings.control.kd < 0.0F ||
+      settings.control.max_feedback_correction <= 0.0F ||
+      settings.control.max_feedback_correction > 1.0F ||
+      settings.control.output_min >= 0.0F || settings.control.output_max <= 0.0F ||
+      settings.control.output_min >= settings.control.output_max ||
+      settings.supply_voltage.divider_gain < 1.0F ||
+      settings.supply_voltage.divider_gain > 20.0F ||
+      settings.safety.min_supply_voltage_v < 0.0F ||
+      settings.safety.min_supply_voltage_v >= settings.safety.max_supply_voltage_v ||
+      settings.safety.max_supply_voltage_v > 20.0F ||
+      settings.safety.max_jerk_rad_s3 <= 0.0F || settings.safety.max_duty <= 0.0F ||
+      settings.safety.max_duty > 1.0F || settings.safety.max_current_a <= 0.0F ||
+      settings.motor.start_duty_forward < 0.0F ||
+      settings.motor.start_duty_forward > settings.safety.max_duty ||
+      settings.motor.start_duty_reverse < 0.0F ||
+      settings.motor.start_duty_reverse > settings.safety.max_duty ||
+      settings.motor.current_gain_a_per_v <= 0.0F ||
+      settings.motor.current_filter_cutoff_hz < 0.1F ||
+      settings.motor.current_filter_cutoff_hz > 200.0F ||
+      settings.encoder.estimator_min_counts == 0U ||
+      settings.encoder.estimator_min_counts > 32U ||
+      settings.encoder.estimator_max_window_us < 1000U ||
+      settings.encoder.estimator_max_window_us > 500000U ||
+      settings.encoder.estimator_stale_timeout_us <
+          settings.encoder.estimator_max_window_us ||
+      settings.encoder.estimator_stale_timeout_us > 2000000U ||
+      settings.safety.encoder_timeout_ms < 50U ||
+      settings.safety.encoder_timeout_ms > 10000U ||
+      settings.safety.encoder_timeout_velocity_rad_s <= 0.0F ||
+      settings.safety.encoder_timeout_velocity_rad_s > settings.safety.max_velocity_rad_s ||
+      settings.characterization.duty_step <= 0.0F ||
+      settings.characterization.duty_step > 0.1F ||
+      settings.characterization.motion_threshold_rad_s <= 0.0F ||
+      settings.characterization.settle_ms < 50U ||
+      settings.characterization.reversal_pause_ms < 250U ||
+      settings.characterization.maximum_hold_ms < 250U ||
+      settings.characterization.consecutive_motion_samples == 0U) {
+    return false;
+  }
+  for (uint8_t index = 0; index < settings.profile_count; ++index) {
+    const auto& profile = settings.profiles[index];
+    if (static_cast<uint8_t>(profile.kind) > static_cast<uint8_t>(ProfileKind::Waypoints) ||
+        profile.duration_ms == 0U || profile.point_count > kMaximumProfilePoints ||
+        !finite(profile.target_velocity_rad_s) || !finite(profile.sine_mean_rad_s) ||
+        !finite(profile.sine_amplitude_rad_s) || !finite(profile.sine_frequency_hz) ||
+        profile.target_velocity_rad_s < 0.0F ||
+        profile.target_velocity_rad_s > settings.safety.max_velocity_rad_s ||
+        profile.sine_mean_rad_s < std::fabs(profile.sine_amplitude_rad_s) ||
+        profile.sine_mean_rad_s + std::fabs(profile.sine_amplitude_rad_s) >
+            settings.safety.max_velocity_rad_s) {
+      return false;
+    }
+    if (profile.kind == ProfileKind::Sine && profile.sine_frequency_hz <= 0.0F) {
+      return false;
+    }
+    if (profile.kind == ProfileKind::Waypoints &&
+        (profile.point_count < 2U || profile.points[0].time_ms != 0U ||
+         profile.points[profile.point_count - 1U].time_ms != profile.duration_ms)) {
+      return false;
+    }
+    if (profile.point_count > 0U &&
+        (!finite(profile.points[0].velocity_rad_s) ||
+         profile.points[0].velocity_rad_s < 0.0F ||
+         profile.points[0].velocity_rad_s > settings.safety.max_velocity_rad_s)) {
+      return false;
+    }
+    for (uint8_t point = 1; point < profile.point_count; ++point) {
+      const auto& previous = profile.points[point - 1U];
+      const auto& current = profile.points[point];
+      if (!finite(current.velocity_rad_s) || current.time_ms <= previous.time_ms ||
+          current.time_ms > profile.duration_ms ||
+          profile.points[point].velocity_rad_s < 0.0F ||
+          profile.points[point].velocity_rad_s > settings.safety.max_velocity_rad_s) {
+        return false;
+      }
+      const float span_s = static_cast<float>(current.time_ms - previous.time_ms) * 0.001F;
+      if (std::fabs(current.velocity_rad_s - previous.velocity_rad_s) / span_s >
+          settings.safety.max_acceleration_rad_s2 + 0.001F) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool SettingsStore::load(MachineSettings& settings) {
+  Preferences preferences;
+  if (!preferences.begin(kNamespace, true)) {
+    settings = defaults();
+    return false;
+  }
+  const size_t stored_size = preferences.getBytesLength(kBlobKey);
+  bool loaded = false;
+  bool migrated = false;
+
+  // Stored sizes are schema-specific. Keep each large blob in a separate scope so
+  // boot never reserves every historical MachineSettings layout on the task stack.
+  if (stored_size == sizeof(PersistedSettings)) {
+    PersistedSettings blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == MachineSettings::kSchemaVersion &&
+        blob.payload_size == sizeof(MachineSettings) && blob.crc == crc &&
+        validate(blob.payload)) {
+      settings = blob.payload;
+      loaded = true;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV6)) {
+    LegacyPersistedSettingsV6 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 6U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      copyLegacyMotor(blob.payload.motor, settings.motor);
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV5)) {
+    LegacyPersistedSettingsV5 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 5U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      copyLegacyControl(blob.payload.control, settings.control);
+      copyLegacyMotor(blob.payload.motor, settings.motor);
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV4)) {
+    LegacyPersistedSettingsV4 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 4U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      copyLegacyControl(blob.payload.control, settings.control);
+      copyLegacyMotor(blob.payload.motor, settings.motor);
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety.max_velocity_rad_s = blob.payload.safety.max_velocity_rad_s;
+      settings.safety.max_acceleration_rad_s2 = blob.payload.safety.max_acceleration_rad_s2;
+      settings.safety.max_jerk_rad_s3 = blob.payload.safety.max_jerk_rad_s3;
+      settings.safety.max_current_a = blob.payload.safety.max_current_a;
+      settings.safety.min_supply_voltage_v = blob.payload.safety.min_supply_voltage_v;
+      settings.safety.max_supply_voltage_v = blob.payload.safety.max_supply_voltage_v;
+      settings.safety.max_duty = blob.payload.safety.max_duty;
+      settings.safety.command_timeout_ms = blob.payload.safety.command_timeout_ms;
+      settings.safety.encoder_timeout_ms = blob.payload.safety.encoder_timeout_ms;
+      settings.safety.current_sense_enabled = blob.payload.safety.current_sense_enabled;
+      settings.safety.driver_diagnostic_enabled =
+          blob.payload.safety.driver_diagnostic_enabled;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  }
+
+  preferences.end();
+  if (!loaded) {
+    settings = defaults();
+    return false;
+  }
+  if (migrated) {
+    save(settings);
+  }
+  return true;
+}
+
+bool SettingsStore::save(const MachineSettings& settings) {
+  if (!validate(settings)) {
+    return false;
+  }
+  PersistedSettings blob{};
+  blob.payload = settings;
+  blob.crc = protocol::crc16CcittFalse(reinterpret_cast<const uint8_t*>(&blob.payload),
+                                       sizeof(blob.payload));
+  Preferences preferences;
+  if (!preferences.begin(kNamespace, false)) {
+    return false;
+  }
+  const bool result = preferences.putBytes(kBlobKey, &blob, sizeof(blob)) == sizeof(blob);
+  preferences.end();
+  return result;
+}
+
+bool SettingsStore::erase() {
+  Preferences preferences;
+  if (!preferences.begin(kNamespace, false)) {
+    return false;
+  }
+  const bool result = preferences.clear();
+  preferences.end();
+  return result;
+}
+
+}  // namespace mm
