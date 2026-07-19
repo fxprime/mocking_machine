@@ -77,6 +77,11 @@ DISARMED → ARM command → ARMED → RUN command → RUNNING
 
 Manual duty expires automatically. Characterization requires the literal `CONFIRM_UNLOADED`, tests both directions, pauses before reversal, measures breakaway duty and maximum velocity, then saves the motor characteristics. Current sense and DIAG are secondary protection; the physical fuse and emergency stop remain primary.
 
+Saving a characterization result also applies a conservative velocity constraint: `vmax` can
+only decrease to the lower measured forward/reverse maximum, never increase. Stored velocity
+profiles and the encoder-timeout threshold are clamped in the same candidate settings copy,
+then the whole structure is validated before a single Preferences write.
+
 ## Browser console
 
 The dependency-free console targets a rectangular desktop browser around 1440×900 at desk distance, English/LTR, keyboard and pointer. It uses a compact 1.125 type scale, persistent connection/machine/fault state, visible focus, reduced-motion support, actuator confirmation dialogs, live response chart, settings table, tuning controls, terminal, calibration, and CSV export. Encoder CPR calibration is host-guided: telemetry supplies the 64-bit start/end counts, the browser averages their absolute difference over 1–10 manually entered output-shaft turns, and an explicit review action saves the rounded integer through the normal disarmed `SET_PARAMETER` path. It adds no work to the control loop.

@@ -36,6 +36,9 @@ assert.match(indexSource, /id="startEncoderCalibration"/);
 assert.match(indexSource, /id="finishEncoderCalibration"/);
 assert.match(indexSource, /id="encoderCalibrationResult"/);
 assert.match(indexSource, /id="saveEncoderCalibration"/);
+assert.match(indexSource, /id="resultCharacterizedVmax"/);
+assert.match(appSource, /Math\.min\(configuredVmax, detectedLimit\)/,
+  "Characterization review must show the clamped vmax before save");
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");

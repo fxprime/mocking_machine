@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "control/CharacterizationSettings.hpp"
+
 namespace mm {
 namespace {
 
@@ -407,17 +409,25 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
   }
   if (argc == 2 && std::strcmp(argv[1], "save") == 0 &&
       characterization_result_pending_ && state_ == RunState::Disarmed) {
-    const MotorCharacteristics previous = settings_.motor;
-    settings_.motor = characterization_candidate_;
-    if (!settings_store_.save(settings_)) {
-      settings_.motor = previous;
+    MachineSettings candidate{};
+    if (!characterization::prepareCharacterizedSettings(
+            settings_, characterization_candidate_, candidate) ||
+        !SettingsStore::validate(candidate)) {
+      Serial.println("ERR characterization result is invalid");
+      return;
+    }
+    if (!settings_store_.save(candidate)) {
       Serial.println("ERR characterization result remains pending; storage failed");
       return;
     }
+    settings_ = candidate;
     motor_.setCharacteristics(settings_.motor);
+    motor_.setSafety(settings_.safety);
+    motion_limiter_.configure(settings_.safety);
     characterization_result_pending_ = false;
     characterization_notification_pending_ = false;
-    Serial.println("OK characterization result applied and saved");
+    Serial.printf("OK characterization result applied and saved; vmax=%.3f rad/s\r\n",
+                  settings_.safety.max_velocity_rad_s);
     return;
   }
   if (argc != 3 || std::strcmp(argv[1], "start") != 0 ||

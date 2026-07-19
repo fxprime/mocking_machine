@@ -116,7 +116,7 @@ The controller fields are the proportional, integral, and derivative contributio
 
 `CHARACTERIZATION_RESULT` carries `f32 start_duty_forward, f32 start_duty_reverse, f32 max_velocity_forward_rad_s, f32 max_velocity_reverse_rad_s`. Results remain pending in RAM and are resent when streaming starts until explicitly reviewed.
 
-`CHARACTERIZATION_ACTION` carries `u8 save` (`1` applies and persists the candidate, `0` discards it). Characterization never writes Preferences automatically. An abort, stop, or fault before completion leaves the previously saved motor characteristics unchanged.
+`CHARACTERIZATION_ACTION` carries `u8 save` (`1` applies and persists the candidate, `0` discards it). On save, firmware defines the safe detected velocity as the lower magnitude of the forward and reverse maxima. If the configured `vmax` exceeds that result it is reduced; an already-lower `vmax` is preserved. The encoder-timeout velocity and every stored profile target, sine range, and waypoint are clamped consistently before the complete settings blob is validated and saved. Characterization never writes Preferences automatically. An abort, stop, invalid result, or fault before completion leaves the previously saved settings unchanged.
 
 `CHARACTERIZATION_STATUS` carries `u8 stage, u8 result_pending, f32 applied_duty, f32 measured_velocity_rad_s`. Firmware emits it at 10 Hz while the routine runs and on state transitions. Stages are `0 Idle`, `1 ForwardDeadband`, `2 PauseBeforeReverseDeadband`, `3 ReverseDeadband`, `4 PauseBeforeForwardMaximum`, `5 ForwardMaximum`, `6 PauseBeforeReverseMaximum`, and `7 ReverseMaximum`.
 

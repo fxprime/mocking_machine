@@ -346,8 +346,9 @@
         <div><dt>Reverse breakaway PWM</dt><dd id="resultStartDutyReverse">—</dd></div>
         <div><dt>Maximum forward velocity</dt><dd><span id="resultMaxVelocityForward">—</span> rad/s <small id="resultMaxRpmForward"></small></dd></div>
         <div><dt>Maximum reverse velocity</dt><dd><span id="resultMaxVelocityReverse">—</span> rad/s <small id="resultMaxRpmReverse"></small></dd></div>
+        <div><dt>Machine vmax after save</dt><dd><span id="resultCharacterizedVmax">—</span> rad/s <small id="resultCharacterizedVmaxDetail"></small></dd></div>
       </dl>
-      <p class="hint">Save applies these values immediately and writes them to this device’s Preferences. Discard keeps the previous characteristics.</p>
+      <p class="hint">Save uses the lower measured direction as the safe motor limit. It only lowers vmax; dependent profile velocities and the encoder-timeout threshold are clamped with it. Discard keeps the previous characteristics.</p>
       <div class="dialog-actions"><button id="discardCharacterization" value="discard">Discard result</button><button id="saveCharacterization" value="save" class="primary">Apply and save</button></div>
     </form>
   </dialog>

@@ -1327,12 +1327,22 @@ async function stopAllManualOutputs(disarm = true) {
 
 function renderCharacterizationResult(result) {
   const rpm = radiansPerSecond => radiansPerSecond * 60 / (2 * Math.PI);
+  const detectedLimit = Math.min(Math.abs(result.maxForward), Math.abs(result.maxReverse));
+  const configuredVmax = Number(settings.vmax);
+  const characterizedVmax = Number.isFinite(configuredVmax)
+      ? Math.min(configuredVmax, detectedLimit)
+      : detectedLimit;
   $("resultStartDutyForward").textContent = `${(result.startForward * 100).toFixed(1)}%`;
   $("resultStartDutyReverse").textContent = `${(result.startReverse * 100).toFixed(1)}%`;
   $("resultMaxVelocityForward").textContent = result.maxForward.toFixed(2);
   $("resultMaxVelocityReverse").textContent = result.maxReverse.toFixed(2);
   $("resultMaxRpmForward").textContent = `(${rpm(result.maxForward).toFixed(0)} rpm)`;
   $("resultMaxRpmReverse").textContent = `(${rpm(result.maxReverse).toFixed(0)} rpm)`;
+  $("resultCharacterizedVmax").textContent = formatNumber(characterizedVmax, 2);
+  $("resultCharacterizedVmaxDetail").textContent = Number.isFinite(configuredVmax) &&
+      characterizedVmax < configuredVmax
+      ? `clamped from ${formatNumber(configuredVmax, 2)} rad/s`
+      : "configured vmax already lower";
   $("saveCharacterization").disabled = false;
   $("discardCharacterization").disabled = false;
   characterizationRunning = false;

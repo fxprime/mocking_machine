@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "control/CharacterizationMetrics.hpp"
+#include "control/CharacterizationSettings.hpp"
 #include "control/RotorPosition.hpp"
 
 #ifndef BUILD_VERSION
@@ -1224,18 +1225,26 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
         sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
         return;
       }
-      const MotorCharacteristics previous = settings_.motor;
-      settings_.motor = characterization_candidate_;
-      if (!settings_store_.save(settings_)) {
-        settings_.motor = previous;
+      MachineSettings candidate{};
+      if (!characterization::prepareCharacterizedSettings(
+              settings_, characterization_candidate_, candidate) ||
+          !SettingsStore::validate(candidate)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      if (!settings_store_.save(candidate)) {
         sendAck(frame.sequence, frame.message_id, ResultCode::StorageFailure);
         return;
       }
+      settings_ = candidate;
       motor_.setCharacteristics(settings_.motor);
+      motor_.setSafety(settings_.safety);
+      motion_limiter_.configure(settings_.safety);
       characterization_result_pending_ = false;
       characterization_notification_pending_ = false;
       sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
       sendSettings(frame.sequence);
+      sendProfiles(frame.sequence);
       return;
     }
     default:

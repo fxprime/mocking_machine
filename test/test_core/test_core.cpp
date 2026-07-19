@@ -5,6 +5,7 @@
 
 #include "control/IncrementalVelocityController.hpp"
 #include "control/CharacterizationMetrics.hpp"
+#include "control/CharacterizationSettings.hpp"
 #include "control/CurrentCalibration.hpp"
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
@@ -265,6 +266,50 @@ void test_characterization_peak_is_independent_of_encoder_polarity() {
       characterization::updatePeakVelocityMagnitude(42.0F, 10.0F));
 }
 
+void test_characterization_clamps_vmax_and_dependent_settings() {
+  MachineSettings current{};
+  current.safety.max_velocity_rad_s = 150.0F;
+  current.safety.encoder_timeout_velocity_rad_s = 120.0F;
+  current.profile_count = 1U;
+  current.profiles[0].target_velocity_rad_s = 140.0F;
+  current.profiles[0].sine_mean_rad_s = 100.0F;
+  current.profiles[0].sine_amplitude_rad_s = 30.0F;
+  current.profiles[0].point_count = 2U;
+  current.profiles[0].points[0].velocity_rad_s = 0.0F;
+  current.profiles[0].points[1].velocity_rad_s = 140.0F;
+
+  MotorCharacteristics measured = current.motor;
+  measured.max_velocity_forward_rad_s = 125.0F;
+  measured.max_velocity_reverse_rad_s = 110.0F;
+  MachineSettings candidate{};
+  TEST_ASSERT_TRUE(characterization::prepareCharacterizedSettings(
+      current, measured, candidate));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
+                           candidate.safety.max_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
+                           candidate.safety.encoder_timeout_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
+                           candidate.profiles[0].target_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
+                           candidate.profiles[0].sine_mean_rad_s +
+                               std::fabs(candidate.profiles[0].sine_amplitude_rad_s));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
+                           candidate.profiles[0].points[1].velocity_rad_s);
+}
+
+void test_characterization_never_raises_existing_vmax() {
+  MachineSettings current{};
+  current.safety.max_velocity_rad_s = 80.0F;
+  MotorCharacteristics measured = current.motor;
+  measured.max_velocity_forward_rad_s = 125.0F;
+  measured.max_velocity_reverse_rad_s = 110.0F;
+  MachineSettings candidate{};
+  TEST_ASSERT_TRUE(characterization::prepareCharacterizedSettings(
+      current, measured, candidate));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 80.0F,
+                           candidate.safety.max_velocity_rad_s);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
@@ -289,5 +334,7 @@ int main(int, char**) {
   RUN_TEST(test_encoder_watchdog_refreshes_on_valid_edge);
   RUN_TEST(test_vin_calibration_ceiling_is_above_valid_sixteen_volt_input);
   RUN_TEST(test_characterization_peak_is_independent_of_encoder_polarity);
+  RUN_TEST(test_characterization_clamps_vmax_and_dependent_settings);
+  RUN_TEST(test_characterization_never_raises_existing_vmax);
   return UNITY_END();
 }
