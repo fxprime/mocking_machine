@@ -10,6 +10,7 @@
 #include "control/CharacterizationSettings.hpp"
 #include "control/RotorPosition.hpp"
 #include "profile/ProfileCollection.hpp"
+#include "protocol/SerialBandwidth.hpp"
 
 #ifndef BUILD_VERSION
 #define BUILD_VERSION "development"
@@ -285,6 +286,12 @@ void MachineApplication::configureVelocityController() {
 
 void MachineApplication::begin() {
   const bool loaded = settings_store_.load(settings_);
+  const uint16_t constrained_stream_rate = protocol::constrainTelemetryStreamRateHz(
+      settings_.serial.baud, settings_.serial.stream_rate_hz);
+  if (settings_.serial.stream_rate_hz != constrained_stream_rate) {
+    settings_.serial.stream_rate_hz = constrained_stream_rate;
+    settings_store_.save(settings_);
+  }
   Serial.begin(settings_.serial.baud);
   serial_link_.begin(Serial, &MachineApplication::frameThunk, &MachineApplication::lineThunk, this);
 
@@ -927,6 +934,11 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.encoder.zero_index_minimum_separation_revolutions = update.value; break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
+      }
+      if (candidate.serial.stream_rate_hz >
+          protocol::maximumTelemetryStreamRateHz(candidate.serial.baud)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
       }
       if (!SettingsStore::validate(candidate)) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);

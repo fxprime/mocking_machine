@@ -83,7 +83,7 @@ struct SafetyConfiguration {
 
 struct SerialConfiguration {
   uint32_t baud = 115200;
-  uint16_t stream_rate_hz = 100;
+  uint16_t stream_rate_hz = 50;
 };
 
 struct EncoderConfiguration {
@@ -151,7 +151,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 10;
+  static constexpr uint32_t kSchemaVersion = 11;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

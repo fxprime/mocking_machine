@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "control/CharacterizationSettings.hpp"
+#include "protocol/SerialBandwidth.hpp"
 
 namespace mm {
 namespace {
@@ -168,8 +169,10 @@ void MachineApplication::commandStream(const int argc, char* argv[]) {
     Serial.println("OK stream off");
   } else if (argc == 3 && std::strcmp(argv[1], "rate") == 0) {
     uint32_t rate = 0;
-    if (!parseUnsigned(argv[2], rate) || rate == 0U || rate > 500U) {
-      Serial.println("ERR rate must be 1..500 Hz");
+    const uint16_t maximum_rate =
+        protocol::maximumTelemetryStreamRateHz(settings_.serial.baud);
+    if (!parseUnsigned(argv[2], rate) || rate == 0U || rate > maximum_rate) {
+      Serial.printf("ERR rate must be 1..%u Hz at the configured baud\r\n", maximum_rate);
       return;
     }
     settings_.serial.stream_rate_hz = static_cast<uint16_t>(rate);

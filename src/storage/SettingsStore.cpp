@@ -477,12 +477,20 @@ bool SettingsStore::load(MachineSettings& settings) {
     const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
     const uint16_t crc = protocol::crc16CcittFalse(
         reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
-    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+    const bool current_schema =
         blob.schema_version == MachineSettings::kSchemaVersion &&
-        blob.payload_size == sizeof(MachineSettings) && blob.crc == crc &&
-        validate(blob.payload)) {
+        blob.payload.schema_version == MachineSettings::kSchemaVersion;
+    const bool compatible_v10 = blob.schema_version == 10U &&
+                                blob.payload.schema_version == 10U;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        (current_schema || compatible_v10) &&
+        blob.payload_size == sizeof(MachineSettings) && blob.crc == crc) {
       settings = blob.payload;
-      loaded = true;
+      if (compatible_v10) {
+        settings.schema_version = MachineSettings::kSchemaVersion;
+        migrated = true;
+      }
+      loaded = validate(settings);
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV9)) {
     LegacyPersistedSettingsV9 blob{};

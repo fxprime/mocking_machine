@@ -151,9 +151,16 @@ void SerialLink::serviceTx() {
     return;
   }
   size_t available = static_cast<size_t>(std::max(0, serial_->availableForWrite()));
-  while (available-- > 0U && tx_tail_ != tx_head_) {
-    serial_->write(tx_[tx_tail_]);
-    tx_tail_ = (tx_tail_ + 1U) % tx_.size();
+  while (available > 0U && tx_tail_ != tx_head_) {
+    const size_t queued_contiguous = tx_head_ > tx_tail_ ? tx_head_ - tx_tail_
+                                                         : tx_.size() - tx_tail_;
+    const size_t requested = std::min(available, queued_contiguous);
+    const size_t written = serial_->write(tx_.data() + tx_tail_, requested);
+    if (written == 0U) {
+      break;
+    }
+    tx_tail_ = (tx_tail_ + written) % tx_.size();
+    available -= written;
   }
 }
 

@@ -15,6 +15,7 @@
 #include "profile/VelocityProfile.hpp"
 #include "profile/ProfileCollection.hpp"
 #include "protocol/Crc16.hpp"
+#include "protocol/SerialBandwidth.hpp"
 
 using namespace mm;
 
@@ -33,6 +34,17 @@ void test_create_profile_frame_crc_vector() {
   protected_bytes[6] = 169U;   // Bounded payload size, little endian.
   TEST_ASSERT_EQUAL_HEX16(
       0xA828U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
+void test_telemetry_rate_respects_uart_bandwidth() {
+  TEST_ASSERT_EQUAL_UINT16(84U, protocol::maximumTelemetryStreamRateHz(115200U));
+  TEST_ASSERT_EQUAL_UINT16(84U, protocol::constrainTelemetryStreamRateHz(115200U, 200U));
+  TEST_ASSERT_EQUAL_UINT16(50U, protocol::constrainTelemetryStreamRateHz(115200U, 50U));
+  TEST_ASSERT_EQUAL_UINT16(500U, protocol::maximumTelemetryStreamRateHz(921600U));
+  const SerialConfiguration defaults{};
+  TEST_ASSERT_LESS_OR_EQUAL_UINT16(
+      protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
+  TEST_ASSERT_EQUAL_UINT32(11U, MachineSettings::kSchemaVersion);
 }
 
 void test_incremental_controller_scales_integral_by_time() {
@@ -275,7 +287,7 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(10U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(11U, settings.schema_version);
   TEST_ASSERT_EQUAL_UINT32(EncoderConfiguration::kDefaultZeroIndexMinimumIntervalUs,
                            settings.encoder.zero_index_min_interval_us);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F,
@@ -369,6 +381,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_create_profile_frame_crc_vector);
+  RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);
   RUN_TEST(test_incremental_controller_reports_each_delta_term);

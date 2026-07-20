@@ -5,6 +5,7 @@ import { createTelemetryCsv } from "./csv-export.mjs";
 import { updateRotorVisualState } from "./rotor-position.mjs";
 import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
 import { nextAvailableProfileId } from "./profile-collection.mjs";
+import { maximumTelemetryStreamRateHz } from "./serial-bandwidth.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -12,6 +13,7 @@ const VERSION = 1;
 const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const MAX_PROFILES = 8;
+const PROFILE_ACTION_TIMEOUT_MS = 10000;
 
 let port;
 let reader;
@@ -182,6 +184,7 @@ function handleMessage(id, data) {
           ? data.getFloat32(127, true)
           : 0.5
     };
+    parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
     rotorVisualState = undefined;
     renderSettings();
     renderEncoderCalibration();
@@ -331,7 +334,7 @@ function handleMessage(id, data) {
         sendFrame(profileAction.createOnly ? MSG.CREATE_PROFILE : MSG.SET_PROFILE,
                   encodeProfile(profileAction.type === "save"));
       } else {
-        profileAction = undefined;
+        finishProfileAction();
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
         toast(`Could not disarm before profile update: ${resultDescription(result)}.`);
@@ -438,7 +441,7 @@ function handleMessage(id, data) {
     if (request === MSG.SET_PROFILE || request === MSG.CREATE_PROFILE) {
       const action = profileAction;
       if (result !== 0) {
-        profileAction = undefined;
+        finishProfileAction();
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
         const reason = request === MSG.CREATE_PROFILE && result === 1
@@ -454,7 +457,7 @@ function handleMessage(id, data) {
         const payload = new Uint8Array(2); new DataView(payload.buffer).setUint16(0, action.profileId, true);
         sendFrame(MSG.SELECT_PROFILE, payload);
       } else {
-        profileAction = undefined;
+        finishProfileAction();
         $("profileEditorDialog").close("save");
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
@@ -470,7 +473,7 @@ function handleMessage(id, data) {
         sendFrame(MSG.ARM);
         renderProfiles();
       } else {
-        profileAction = undefined;
+        finishProfileAction();
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
         $("profileRunCommandStatus").textContent = `Could not select profile: ${resultDescription(result)}.`;
@@ -493,7 +496,7 @@ function handleMessage(id, data) {
         $("profileRunCommandStatus").textContent = "Motor armed. Waiting for firmware run confirmation…";
         sendFrame(MSG.START_RUN);
       } else {
-        profileAction = undefined;
+        finishProfileAction();
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
         $("profileRunCommandStatus").textContent = `Could not arm: ${resultDescription(result)}.`;
@@ -518,7 +521,7 @@ function handleMessage(id, data) {
     }
     if (request === MSG.START_RUN && profileAction?.stage === "start") {
       if (result === 0) {
-        profileAction = undefined;
+        finishProfileAction();
         profileTestActive = true; profileTestSawRunning = false; profileTestSamples = [];
         profileTestStartMs = performance.now();
         $("profileEditorDialog").close("run");
@@ -531,7 +534,7 @@ function handleMessage(id, data) {
         $("profileTestProgress").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
         toast("Firmware confirmed profile test is running.");
       } else {
-        profileAction = undefined;
+        finishProfileAction();
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
         $("profileRunCommandStatus").textContent = `Run was not started: ${resultDescription(result)}.`;
@@ -565,7 +568,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; profileAction = undefined; motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; finishProfileAction(); motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderEncoderCalibration();
 }
 
@@ -967,9 +970,18 @@ function decodeProfile(data) {
 function renderProfiles() {
   if (!$("profileRows")) return;
   const full = profiles.length >= MAX_PROFILES;
+  const unavailableReason = !connected
+    ? "Connect to create a profile."
+    : full
+      ? `Firmware profile storage is full (${MAX_PROFILES}/${MAX_PROFILES}).`
+      : profileAction
+        ? "Waiting for the current profile command to finish…"
+        : "";
   $("profileCapacity").textContent = `${profiles.length} / ${MAX_PROFILES} profiles`;
   $("profileCapacity").className = `status-badge ${full ? "fault" : "offline"}`;
-  $("newProfile").disabled = !connected || full || Boolean(profileAction);
+  $("newProfile").disabled = Boolean(unavailableReason);
+  $("newProfile").title = unavailableReason;
+  $("profileCreateReason").textContent = unavailableReason || "Ready to create another profile.";
   if (!profiles.length) {
     $("profileRows").innerHTML = `<tr><td colspan="6">${connected ? "Waiting for firmware profiles…" : "Connect to load firmware profiles."}</td></tr>`;
     $("tuningProfileSelect").innerHTML = '<option value="">No profiles available</option>';
@@ -980,6 +992,27 @@ function renderProfiles() {
   const previous = $("tuningProfileSelect").value;
   $("tuningProfileSelect").innerHTML = profiles.map(profile => `<option value="${profile.id}">${escapeHtml(profile.name)} · ${formatNumber(profile.durationMs / 1000, 2)} s</option>`).join("");
   $("tuningProfileSelect").value = profiles.some(profile => String(profile.id) === previous) ? previous : String(settings.profileId);
+}
+
+function finishProfileAction() {
+  const action = profileAction;
+  if (action?.timeoutId !== undefined) clearTimeout(action.timeoutId);
+  profileAction = undefined;
+  return action;
+}
+
+function armProfileActionTimeout(action) {
+  action.timeoutId = setTimeout(() => {
+    if (profileAction !== action) return;
+    finishProfileAction();
+    $("saveProfile").disabled = !connected;
+    $("runProfileTest").disabled = !connected;
+    renderProfiles();
+    $("profileRunCommandStatus").classList.remove("hidden");
+    $("profileRunCommandStatus").textContent = "Firmware did not acknowledge the profile command. The controls were unlocked; reconnect if communication remains stalled.";
+    if (action.type === "run" && writer) sendFrame(MSG.STOP_RUN).catch(() => {});
+    toast("Profile command timed out; controls unlocked.");
+  }, PROFILE_ACTION_TIMEOUT_MS);
 }
 
 function profileToWaypoints(profile) {
@@ -1194,6 +1227,7 @@ async function submitProfile(type) {
   if (type === "run" && !await confirmSafety("This test will rotate the motor using the edited velocity path. Verify the imbalance setting, close the guard, and keep the emergency stop accessible.")) return;
   profileAction = { type, profileId: editingProfile.id, createOnly: editingProfile.createOnly,
                     stage: preparation.firstCommand };
+  armProfileActionTimeout(profileAction);
   $("saveProfile").disabled = true; $("runProfileTest").disabled = true;
   $("newProfile").disabled = true;
   if (type === "run") {

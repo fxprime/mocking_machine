@@ -47,6 +47,10 @@ assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
 assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
 assert.match(indexSource, /id="newProfile"/, "Profiles page must expose a create action");
+assert.match(indexSource, /id="profileCreateReason"/,
+  "Profiles page must explain why creation is unavailable");
+assert.match(appSource, /PROFILE_ACTION_TIMEOUT_MS[\s\S]*Profile command timed out; controls unlocked/,
+  "A lost firmware acknowledgement must not leave profile creation disabled forever");
 assert.match(appSource, /CREATE_PROFILE:\s*0x0124/,
   "Profile creation must use a separate message ID instead of changing SET_PROFILE length");
 assert.match(appSource, /new Uint8Array\(169\)/,

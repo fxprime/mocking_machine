@@ -135,3 +135,5 @@ The host should also record the most recent HEARTBEAT build string and SETTINGS 
 Type `help` to receive the firmware-owned list. Commands are bounded to 159 characters and 10 whitespace-separated arguments. No quoting or dynamic allocation is used.
 
 Changing baud rate cannot be truly autodetected by a normal UART after boot. The browser should probe a short supported-rate list by reopening the selected port and waiting for a valid CRC heartbeat. A persisted baud change must acknowledge at the old rate and take effect after reboot; that command is reserved for the full parameter protocol.
+
+Telemetry rate is bounded by UART capacity. Firmware reserves 30% of link bandwidth for heartbeats, acknowledgements, settings, and terminal traffic, then computes the maximum from the 96-byte telemetry frame and 10 UART bits per byte. At 115200 baud the accepted range is 1–84 Hz. Schema 11 migrates a previously saved higher rate down to this limit without discarding any other machine settings.
