@@ -46,6 +46,13 @@ assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
 assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
+assert.match(indexSource, /id="newProfile"/, "Profiles page must expose a create action");
+assert.match(appSource, /new Uint8Array\(170\)[\s\S]*payload\[169\] = editingProfile\.createOnly \? 1 : 0/,
+  "New profiles must carry explicit create intent");
+assert.match(firmwareSource, /static_assert\(sizeof\(SetProfilePayload\) == 170U/,
+  "Firmware must enforce the extended profile payload boundary");
+assert.match(firmwareSource, /applyProfileUpdate\([\s\S]*update\.create_only != 0U/,
+  "Firmware must apply explicit create-only semantics");
 assert.match(appSource, /rotorPosition:\s*data\.byteLength >= 76 \? data\.getFloat32\(72, true\)/,
   "GUI must decode the appended rotor position telemetry field");
 assert.match(appSource, /rotorNeedle[\s\S]*rotate\(/,

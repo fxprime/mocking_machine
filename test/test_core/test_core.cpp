@@ -13,6 +13,7 @@
 #include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "profile/VelocityProfile.hpp"
+#include "profile/ProfileCollection.hpp"
 #include "protocol/Crc16.hpp"
 
 using namespace mm;
@@ -224,6 +225,31 @@ void test_waypoint_profile_interpolates_and_stops_at_duration() {
   TEST_ASSERT_FLOAT_WITHIN(0.001F, 0.0F, profile.target(3000000));
 }
 
+void test_profile_collection_creates_without_replacing_existing_id() {
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles{};
+  uint8_t count = 1U;
+  profiles[0].profile_id = 0U;
+  VelocityProfileConfiguration created{};
+  created.profile_id = 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ProfileUpdateResult::Created),
+      static_cast<uint8_t>(applyProfileUpdate(profiles, count, created, true)));
+  TEST_ASSERT_EQUAL_UINT8(2U, count);
+  TEST_ASSERT_EQUAL_UINT16(0U, profiles[0].profile_id);
+  TEST_ASSERT_EQUAL_UINT16(1U, profiles[1].profile_id);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ProfileUpdateResult::AlreadyExists),
+      static_cast<uint8_t>(applyProfileUpdate(profiles, count, created, true)));
+  TEST_ASSERT_EQUAL_UINT8(2U, count);
+
+  created.name[0] = 'x';
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ProfileUpdateResult::Replaced),
+      static_cast<uint8_t>(applyProfileUpdate(profiles, count, created, false)));
+  TEST_ASSERT_EQUAL_CHAR('x', profiles[1].name[0]);
+  TEST_ASSERT_EQUAL_UINT8(2U, count);
+}
+
 void test_vin_divider_nominal_gain() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 7.8F,
                            VoltageSenseConfiguration::kNominalDividerGain);
@@ -346,6 +372,7 @@ int main(int, char**) {
   RUN_TEST(test_rotor_phase_tracker_applies_fractional_correction_once_per_zero);
   RUN_TEST(test_sine_profile_stays_one_direction);
   RUN_TEST(test_waypoint_profile_interpolates_and_stops_at_duration);
+  RUN_TEST(test_profile_collection_creates_without_replacing_existing_id);
   RUN_TEST(test_vin_divider_nominal_gain);
   RUN_TEST(test_driver_diagnostic_is_disabled_by_default);
   RUN_TEST(test_encoder_watchdog_grants_fresh_motion_demand_timeout);

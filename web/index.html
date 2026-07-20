@@ -164,7 +164,7 @@
 
     <section id="profiles" class="page">
       <article class="panel">
-        <div class="panel-heading"><div><h2>Velocity profiles</h2><p>Firmware validates direction, velocity, acceleration, and jerk.</p></div></div>
+        <div class="panel-heading"><div><h2>Velocity profiles</h2><p>Firmware validates direction, velocity, acceleration, and jerk.</p></div><div class="action-row"><span id="profileCapacity" class="status-badge offline">0 / 8 profiles</span><button id="newProfile" class="primary" disabled>New profile</button></div></div>
         <table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
           <tbody id="profileRows"><tr><td colspan="6">Connect to load firmware profiles.</td></tr></tbody></table>
         <p class="notice">Profile changes are checked against the velocity and acceleration limits before firmware validation.</p>
@@ -355,7 +355,7 @@
   <dialog id="profileEditorDialog" class="profile-dialog">
     <form method="dialog" id="profileEditorForm">
       <div class="panel-heading">
-        <div><h2>Edit velocity profile</h2><p>Click the graph to add a waypoint. Drag a point to adjust it; select and remove non-end points.</p></div>
+        <div><h2 id="profileEditorTitle">Edit velocity profile</h2><p>Click the graph to add a waypoint. Drag a point to adjust it; select and remove non-end points.</p></div>
         <span id="profileFeasibility" class="status-badge online">✓ Feasible</span>
       </div>
       <div class="profile-form-grid">

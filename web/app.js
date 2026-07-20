@@ -4,12 +4,14 @@ import { estimateClosedLoopStepResponse } from "./step-response-estimator.mjs";
 import { createTelemetryCsv } from "./csv-export.mjs";
 import { updateRotorVisualState } from "./rotor-position.mjs";
 import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
+import { nextAvailableProfileId } from "./profile-collection.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
 const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
+const MAX_PROFILES = 8;
 
 let port;
 let reader;
@@ -95,6 +97,7 @@ async function connect() {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: Number($("baud").value), bufferSize: 4096 });
     writer = port.writable.getWriter();
+    profiles = [];
     connected = true;
     setConnected(true);
     readLoop();
@@ -296,6 +299,7 @@ function handleMessage(id, data) {
       } else {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         toast(`Could not disarm before profile update: ${resultDescription(result)}.`);
       }
       return;
@@ -402,6 +406,7 @@ function handleMessage(id, data) {
       if (result !== 0) {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         $("profileRunCommandStatus").textContent = `Profile rejected: ${resultDescription(result)}.`;
         toast(`Profile rejected: ${resultDescription(result)}.`);
         return;
@@ -415,6 +420,7 @@ function handleMessage(id, data) {
         profileAction = undefined;
         $("profileEditorDialog").close("save");
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         toast("Profile saved to this device.");
       }
       return;
@@ -429,6 +435,7 @@ function handleMessage(id, data) {
       } else {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         $("profileRunCommandStatus").textContent = `Could not select profile: ${resultDescription(result)}.`;
         toast(`Could not select profile: ${resultDescription(result)}.`);
       }
@@ -451,6 +458,7 @@ function handleMessage(id, data) {
       } else {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         $("profileRunCommandStatus").textContent = `Could not arm: ${resultDescription(result)}.`;
         toast(`Could not arm profile test: ${resultDescription(result)}.`);
       }
@@ -478,6 +486,7 @@ function handleMessage(id, data) {
         profileTestStartMs = performance.now();
         $("profileEditorDialog").close("run");
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         $("profileRunCommandStatus").classList.add("hidden");
         $("profileTestProgress").classList.remove("hidden");
         $("stopProfileTest").disabled = false;
@@ -487,6 +496,7 @@ function handleMessage(id, data) {
       } else {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
+        renderProfiles();
         $("profileRunCommandStatus").textContent = `Run was not started: ${resultDescription(result)}.`;
         setProfileTestStatus("▲ Not started", resultDescription(result), "fault");
         toast(`Profile test did not start: ${resultDescription(result)}.`);
@@ -518,7 +528,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; profileAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderEncoderCalibration();
 }
 
@@ -919,6 +929,10 @@ function decodeProfile(data) {
 
 function renderProfiles() {
   if (!$("profileRows")) return;
+  const full = profiles.length >= MAX_PROFILES;
+  $("profileCapacity").textContent = `${profiles.length} / ${MAX_PROFILES} profiles`;
+  $("profileCapacity").className = `status-badge ${full ? "fault" : "offline"}`;
+  $("newProfile").disabled = !connected || full || Boolean(profileAction);
   if (!profiles.length) {
     $("profileRows").innerHTML = `<tr><td colspan="6">${connected ? "Waiting for firmware profiles…" : "Connect to load firmware profiles."}</td></tr>`;
     $("tuningProfileSelect").innerHTML = '<option value="">No profiles available</option>';
@@ -985,10 +999,8 @@ function constrainProfilePoints() {
   points[0].velocity = 0; points.at(-1).velocity = 0;
 }
 
-function openProfileEditor(profileId) {
-  const source = profiles.find(profile => profile.id === profileId);
-  if (!source) return;
-  editingProfile = { id: source.id, name: source.name, duration: Math.max(0.1, source.durationMs / 1000), points: profileToWaypoints(source) };
+function openProfileDraft(source, createOnly) {
+  editingProfile = { id: source.id, name: source.name, duration: Math.max(0.1, source.durationMs / 1000), points: profileToWaypoints(source), createOnly };
   selectedProfilePoint = 0;
   constrainProfilePoints();
   $("profileName").value = editingProfile.name;
@@ -996,11 +1008,31 @@ function openProfileEditor(profileId) {
   $("profileLimitVelocity").textContent = formatNumber(settings.vmax, 2);
   $("profileLimitAcceleration").textContent = formatNumber(settings.amax, 2);
   $("profileLimitJerk").textContent = formatNumber(settings.jmax, 2);
+  $("profileEditorTitle").textContent = createOnly ? "Create velocity profile" : "Edit velocity profile";
+  $("saveProfile").textContent = createOnly ? "Create profile" : "Save profile";
   updateProfileEditor();
   $("saveProfile").disabled = !connected;
   $("runProfileTest").disabled = !connected;
   $("profileEditorDialog").showModal();
   requestAnimationFrame(drawProfileEditorChart);
+}
+
+function openProfileEditor(profileId) {
+  const source = profiles.find(profile => profile.id === profileId);
+  if (source) openProfileDraft(source, false);
+}
+
+function openNewProfileEditor() {
+  const id = nextAvailableProfileId(profiles, MAX_PROFILES);
+  if (id === undefined) return toast(`Firmware can store at most ${MAX_PROFILES} profiles.`);
+  const target = Math.min(20, Math.max(0.1, Number(settings.vmax) || 1));
+  openProfileDraft({
+    id,
+    name: `profile-${id}`,
+    kind: 0,
+    durationMs: 5000,
+    target
+  }, true);
 }
 
 function updateProfileEditor() {
@@ -1107,12 +1139,13 @@ function addProfilePoint(time, velocity) {
 }
 
 function encodeProfile(persist) {
-  const payload = new Uint8Array(169), view = new DataView(payload.buffer);
+  const payload = new Uint8Array(170), view = new DataView(payload.buffer);
   payload[0] = persist ? 1 : 0; view.setUint16(1, editingProfile.id, true); payload[3] = 2;
   payload.set(encoder.encode(editingProfile.name).slice(0, 15), 4);
   view.setFloat32(20, 0, true); view.setFloat32(24, 0, true); view.setFloat32(28, 0, true); view.setFloat32(32, 1, true);
   view.setUint32(36, Math.round(editingProfile.duration * 1000), true); payload[40] = editingProfile.points.length;
   editingProfile.points.forEach((point, index) => { view.setUint32(41 + index * 8, Math.round(point.time * 1000), true); view.setFloat32(45 + index * 8, point.velocity, true); });
+  payload[169] = editingProfile.createOnly ? 1 : 0;
   return payload;
 }
 
@@ -1125,6 +1158,7 @@ async function submitProfile(type) {
   if (type === "run" && !await confirmSafety("This test will rotate the motor using the edited velocity path. Verify the imbalance setting, close the guard, and keep the emergency stop accessible.")) return;
   profileAction = { type, profileId: editingProfile.id, stage: preparation.firstCommand };
   $("saveProfile").disabled = true; $("runProfileTest").disabled = true;
+  $("newProfile").disabled = true;
   if (type === "run") {
     profileTestActive = false; profileTestSawRunning = false; profileTestSamples = [];
     $("profileRunCommandStatus").classList.remove("hidden");
@@ -1555,6 +1589,7 @@ function toast(message) { const node = $("toast"); node.textContent = message; n
 async function confirmSafety(message) { $("safetyMessage").textContent = message; const dialog = $("safetyDialog"); dialog.showModal(); return new Promise(resolve => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true })); }
 
 document.querySelectorAll(".tab").forEach(button => button.addEventListener("click", () => { if (motorTestActive && button.dataset.page !== "motorTest") stopMotorTest(true); if (currentCalibrationDriveActive && button.dataset.page !== "calibration") stopCurrentCalibrationDrive(true); document.querySelectorAll(".tab,.page").forEach(node => node.classList.remove("active")); button.classList.add("active"); $(button.dataset.page).classList.add("active"); }));
+$("newProfile").addEventListener("click", openNewProfileEditor);
 $("profileRows").addEventListener("click", event => {
   const button = event.target.closest(".edit-profile");
   if (button) openProfileEditor(Number(button.dataset.profileId));

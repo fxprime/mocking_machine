@@ -9,6 +9,7 @@
 #include "control/CharacterizationMetrics.hpp"
 #include "control/CharacterizationSettings.hpp"
 #include "control/RotorPosition.hpp"
+#include "profile/ProfileCollection.hpp"
 
 #ifndef BUILD_VERSION
 #define BUILD_VERSION "development"
@@ -179,6 +180,7 @@ struct ProfilePayload {
 struct SetProfilePayload {
   uint8_t persist;
   ProfilePayload profile;
+  uint8_t create_only;
 };
 
 struct MotorTestPayload {
@@ -248,7 +250,7 @@ static_assert(sizeof(CharacterizationStatusPayload) == 10U,
               "Characterization status payload layout changed");
 static_assert(sizeof(ParameterPayload) == 7U, "Parameter payload layout changed");
 static_assert(sizeof(ProfilePayload) == 168U, "Profile payload layout changed");
-static_assert(sizeof(SetProfilePayload) == 169U, "Set profile payload layout changed");
+static_assert(sizeof(SetProfilePayload) == 170U, "Set profile payload layout changed");
 
 VelocityProfileConfiguration decodeProfile(const ProfilePayload& payload) {
   VelocityProfileConfiguration profile{};
@@ -966,21 +968,19 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       }
       SetProfilePayload update{};
       std::memcpy(&update, frame.payload, sizeof(update));
-      if (update.persist > 1U || update.profile.kind > static_cast<uint8_t>(ProfileKind::Waypoints) ||
+      if (update.persist > 1U || update.create_only > 1U ||
+          update.profile.kind > static_cast<uint8_t>(ProfileKind::Waypoints) ||
           update.profile.point_count > kMaximumProfilePoints || update.profile.duration_ms == 0U) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
       }
       MachineSettings candidate = settings_;
-      bool found = false;
-      for (uint8_t index = 0; index < candidate.profile_count; ++index) {
-        if (candidate.profiles[index].profile_id == update.profile.profile_id) {
-          candidate.profiles[index] = decodeProfile(update.profile);
-          found = true;
-          break;
-        }
-      }
-      if (!found || !SettingsStore::validate(candidate)) {
+      const ProfileUpdateResult profile_result = applyProfileUpdate(
+          candidate.profiles, candidate.profile_count, decodeProfile(update.profile),
+          update.create_only != 0U);
+      if ((profile_result != ProfileUpdateResult::Created &&
+           profile_result != ProfileUpdateResult::Replaced) ||
+          !SettingsStore::validate(candidate)) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
       }
