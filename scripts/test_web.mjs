@@ -15,6 +15,8 @@ const indexSource = await readFile(new URL("../web/index.html", import.meta.url)
 const firmwareSource = await readFile(new URL("../src/app/MachineApplication.cpp", import.meta.url), "utf8");
 assert.match(indexSource, /parameterRows[^>]*><tr><td colspan="3">Connect to load firmware parameters/);
 assert.match(appSource, /Connected; waiting for a valid SETTINGS frame/);
+assert.match(appSource, /id === MSG\.HEARTBEAT[\s\S]*requestDeviceSynchronization/,
+  "A valid heartbeat must retry configuration synchronization after boot-time command loss");
 assert.match(appSource, /request === MSG\.SELECT_PROFILE[\s\S]*sendFrame\(MSG\.ARM\)/);
 assert.match(appSource, /request === MSG\.ARM[\s\S]*sendFrame\(MSG\.START_RUN\)/);
 const startAck = appSource.indexOf("request === MSG.START_RUN && profileAction?.stage === \"start\"");

@@ -6,6 +6,7 @@ import { updateRotorVisualState } from "./rotor-position.mjs";
 import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
 import { nextAvailableProfileId } from "./profile-collection.mjs";
 import { maximumTelemetryStreamRateHz } from "./serial-bandwidth.mjs";
+import { DeviceSynchronizer } from "./device-synchronizer.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -14,6 +15,7 @@ const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
+const deviceSynchronizer = new DeviceSynchronizer();
 
 let port;
 let reader;
@@ -93,6 +95,14 @@ function frame(msgId, payload = new Uint8Array()) {
 async function sendFrame(msgId, payload) { if (writer) await writer.write(frame(msgId, payload)); }
 async function sendAscii(command) { if (writer) await writer.write(encoder.encode(`${command}\n`)); }
 
+async function requestDeviceSynchronization() {
+  const now = performance.now();
+  if (!connected || !writer || !deviceSynchronizer.shouldRequest(now)) return;
+  deviceSynchronizer.markRequested(now);
+  await sendFrame(MSG.GET_SETTINGS);
+  await sendFrame(MSG.START_STREAM);
+}
+
 async function connect() {
   if (connected) return disconnect();
   if (!("serial" in navigator)) return toast("Web Serial requires Chrome/Edge on HTTPS or localhost.");
@@ -101,12 +111,12 @@ async function connect() {
     await port.open({ baudRate: Number($("baud").value), bufferSize: 4096 });
     writer = port.writable.getWriter();
     profiles = [];
+    deviceSynchronizer.reset();
     connected = true;
     setConnected(true);
     readLoop();
-    await sendFrame(MSG.GET_SETTINGS);
-    await sendFrame(MSG.START_STREAM);
-    toast("Connected. Telemetry started; motor remains disarmed.");
+    await requestDeviceSynchronization();
+    toast("Connected. Waiting for firmware synchronization; motor remains disarmed.");
   } catch (error) { toast(`Connection failed: ${error.message}`); await disconnect(); }
 }
 
@@ -162,6 +172,7 @@ function handleMessage(id, data) {
   if (id === MSG.HEARTBEAT) {
     const state = data.getUint8(16); latestState = state;
     updateState(state, data.getUint32(12, true));
+    requestDeviceSynchronization().catch(() => {});
   } else if (id === MSG.SETTINGS) {
     settings = {
       schema: data.getUint32(0, true), baud: data.getUint32(4, true), periodUs: data.getUint32(8, true), cpr: data.getUint32(12, true),
@@ -197,6 +208,7 @@ function handleMessage(id, data) {
     profiles.sort((a, b) => a.id - b.id);
     renderProfiles();
   } else if (id === MSG.TELEMETRY) {
+    deviceSynchronizer.markTelemetryReceived();
     const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
     samples.push(sample); if (samples.length > 12000) samples.shift(); renderTelemetry(sample);
     renderProfileTestTelemetry(sample);
@@ -568,7 +580,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; finishProfileAction(); motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); finishProfileAction(); motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderEncoderCalibration();
 }
 
