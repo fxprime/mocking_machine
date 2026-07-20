@@ -61,7 +61,7 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, n
 
 ### SETTINGS payload
 
-`u32 schema, u32 baud, u32 control_period_us, u32 CPR, u16 stream_rate_hz, u16 selected_profile_id, f32 kp, f32 ki, f32 kd, f32 vmax, f32 amax, f32 jmax, f32 imax, f32 max_duty, f32 start_duty_forward, f32 start_duty_reverse, u8 load_setting_id, u8 load_count, i8 motor_direction, u8 stop_mode, f32 supply_divider_gain, f32 supply_input_offset_v, f32 min_supply_voltage_v, f32 max_supply_voltage_v, u8 supply_voltage_pin, f32 current_gain_a_per_v, f32 current_offset_v, u8 current_sense_pin, u8 current_sense_enabled, u8 driver_diagnostic_enabled, u8 driver_diagnostic_pin, u32 encoder_timeout_ms, f32 encoder_timeout_velocity_rad_s, f32 max_feedback_correction, u8 estimator_min_counts, u32 estimator_max_window_us, u32 estimator_stale_timeout_us, f32 current_filter_cutoff_hz, u32 zero_index_min_interval_us, f32 zero_index_correction_gain, i8 encoder_direction`
+`u32 schema, u32 baud, u32 control_period_us, u32 CPR, u16 stream_rate_hz, u16 selected_profile_id, f32 kp, f32 ki, f32 kd, f32 vmax, f32 amax, f32 jmax, f32 imax, f32 max_duty, f32 start_duty_forward, f32 start_duty_reverse, u8 load_setting_id, u8 load_count, i8 motor_direction, u8 stop_mode, f32 supply_divider_gain, f32 supply_input_offset_v, f32 min_supply_voltage_v, f32 max_supply_voltage_v, u8 supply_voltage_pin, f32 current_gain_a_per_v, f32 current_offset_v, u8 current_sense_pin, u8 current_sense_enabled, u8 driver_diagnostic_enabled, u8 driver_diagnostic_pin, u32 encoder_timeout_ms, f32 encoder_timeout_velocity_rad_s, f32 max_feedback_correction, u8 estimator_min_counts, u32 estimator_max_window_us, u32 estimator_stale_timeout_us, f32 current_filter_cutoff_hz, u32 zero_index_min_interval_us, f32 zero_index_correction_gain, i8 encoder_direction, f32 zero_index_minimum_separation_revolutions`
 
 The feedback-correction and three estimator-tuning fields are retained for packet/NVS
 compatibility but are ignored while the classic count-delta velocity path is active.
@@ -74,7 +74,8 @@ The encoder watchdog begins its timeout window when desired velocity first excee
 
 The parameter table also exposes `current_sense_enabled` as parameter 28,
 `current_filter_cutoff_hz` as parameter 29, `zero_index_min_interval_us` as parameter 30,
-and `zero_index_correction_gain` as parameter 31.
+`zero_index_correction_gain` as parameter 31, and
+`zero_index_minimum_separation_revolutions` as parameter 32.
 The current cutoff accepts 0.1–200 Hz. The zero-index interval accepts 100–1,000,000 µs;
 its default is 5,000 µs. Rising edges closer than this to the last accepted zero edge are
 ignored as bounce and counted in telemetry. Filtered current is used for both telemetry and
@@ -85,6 +86,12 @@ The zero correction gain accepts 0–1 and defaults to 0.10. The first accepted 
 establishes the absolute reference. After that, encoder counts remain the primary position
 source and each new index corrects only `gain × phase_error`. A gain of 0 disables subsequent
 phase correction; 1 reproduces full snapping to every accepted index.
+
+The zero-index separation accepts 0–0.95 revolutions and defaults to 0.50. After the first
+accepted edge, a later edge must satisfy both the time interval and encoder-travel threshold.
+Rejected edges increment only `zero_index_rejected_count`; they do not update the accepted
+timestamp/count, increment `zero_index_sequence`, or correct rotor phase. Set the separation
+to 0 only when intentionally disabling the encoder-distance bounce filter.
 
 `SET_PARAMETER` carries `u16 parameter_id, f32 value, u8 persist`. It is accepted only while disarmed. Firmware applies the value to a copy of the complete settings structure, validates all cross-parameter constraints, optionally saves it, reconfigures the affected runtime modules, and returns ACK followed by SETTINGS. Parameter IDs are defined by the firmware/browser parameter table; unknown IDs are rejected.
 

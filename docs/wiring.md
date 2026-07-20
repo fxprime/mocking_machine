@@ -23,7 +23,12 @@ does not reset, suppress, or otherwise modify the GPIO32/33 encoder count. At th
 150 rad/s maximum, one revolution is about 41.9 ms, so the 5 ms default remains comfortably
 below the expected one-pulse-per-revolution interval.
 
-After the first reference, the default `zero_index_correction_gain` of 0.10 applies only 10%
+After the first reference, another zero edge is accepted only after both the 5 ms debounce and
+the default 0.50-revolution encoder separation have elapsed. This rejects a long/noisy optical
+pulse even when another rising edge occurs after the time-only debounce. Rejected edges appear
+only in the rejected-edge diagnostic count; they never advance the accepted zero number.
+
+The default `zero_index_correction_gain` of 0.10 applies only 10%
 of each measured index phase error. Encoder counts therefore control short-term position and
 the optical index removes drift gradually. Increase the gain only when missed encoder counts
 are confirmed; high gain also transfers more optical-trigger jitter into the reported angle.

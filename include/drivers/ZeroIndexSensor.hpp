@@ -17,8 +17,10 @@ struct ZeroIndexCapture {
 
 class ZeroIndexSensor {
  public:
-  bool begin(uint8_t pin, QuadratureEncoder& encoder, uint32_t minimum_interval_us);
+  bool begin(uint8_t pin, QuadratureEncoder& encoder, uint32_t minimum_interval_us,
+             uint32_t minimum_separation_counts);
   void setMinimumIntervalUs(uint32_t minimum_interval_us);
+  void setMinimumSeparationCounts(uint32_t minimum_separation_counts);
   ZeroIndexCapture snapshot() const;
 
  private:
@@ -31,6 +33,7 @@ class ZeroIndexSensor {
   volatile uint32_t sequence_ = 0;
   volatile uint32_t rejected_count_ = 0;
   volatile uint32_t minimum_interval_us_ = 0U;
+  volatile uint32_t minimum_separation_counts_ = 0U;
   mutable portMUX_TYPE mutex_ = portMUX_INITIALIZER_UNLOCKED;
 };
 

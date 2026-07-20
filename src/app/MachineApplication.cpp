@@ -73,6 +73,7 @@ struct SettingsPayload {
   uint32_t zero_index_min_interval_us;
   float zero_index_correction_gain;
   int8_t encoder_direction;
+  float zero_index_minimum_separation_revolutions;
 };
 
 struct TelemetryPayload {
@@ -148,6 +149,7 @@ enum class ParameterId : uint16_t {
   CurrentFilterCutoffHz,
   ZeroIndexMinimumIntervalUs,
   ZeroIndexCorrectionGain,
+  ZeroIndexMinimumSeparationRevolutions,
 };
 
 struct ParameterPayload {
@@ -232,7 +234,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 127U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 131U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -287,7 +289,10 @@ void MachineApplication::begin() {
 
   encoder_.begin(settings_.pins.encoder_a, settings_.pins.encoder_b);
   zero_index_.begin(settings_.pins.zero_index, encoder_,
-                    settings_.encoder.zero_index_min_interval_us);
+                    settings_.encoder.zero_index_min_interval_us,
+                    zeroIndexMinimumSeparationCounts(
+                        settings_.encoder.counts_per_output_revolution,
+                        settings_.encoder.zero_index_minimum_separation_revolutions));
   rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                  settings_.encoder.direction,
                                  settings_.encoder.zero_index_correction_gain);
@@ -912,6 +917,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.encoder.zero_index_min_interval_us = static_cast<uint32_t>(update.value); break;
         case ParameterId::ZeroIndexCorrectionGain:
           candidate.encoder.zero_index_correction_gain = update.value; break;
+        case ParameterId::ZeroIndexMinimumSeparationRevolutions:
+          candidate.encoder.zero_index_minimum_separation_revolutions = update.value; break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -936,6 +943,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
                                    settings_.motor.current_offset_v);
       current_filter_.configure(settings_.motor.current_filter_cutoff_hz);
       zero_index_.setMinimumIntervalUs(settings_.encoder.zero_index_min_interval_us);
+      zero_index_.setMinimumSeparationCounts(zeroIndexMinimumSeparationCounts(
+          settings_.encoder.counts_per_output_revolution,
+          settings_.encoder.zero_index_minimum_separation_revolutions));
       rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                      settings_.encoder.direction,
                                      settings_.encoder.zero_index_correction_gain);
@@ -1299,6 +1309,7 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.encoder.zero_index_min_interval_us,
       settings_.encoder.zero_index_correction_gain,
       settings_.encoder.direction,
+      settings_.encoder.zero_index_minimum_separation_revolutions,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }

@@ -173,7 +173,10 @@ function handleMessage(id, data) {
       currentFilterCutoffHz: data.byteLength >= 118 ? data.getFloat32(114, true) : 20,
       zeroIndexMinIntervalUs: data.byteLength >= 122 ? data.getUint32(118, true) : 5000,
       zeroIndexCorrectionGain: data.byteLength >= 126 ? data.getFloat32(122, true) : 0.1,
-      encoderDirection: data.byteLength >= 127 ? data.getInt8(126) : 1
+      encoderDirection: data.byteLength >= 127 ? data.getInt8(126) : 1,
+      zeroIndexMinSeparationRevolutions: data.byteLength >= 131
+          ? data.getFloat32(127, true)
+          : 0.5
     };
     rotorVisualState = undefined;
     renderSettings();
@@ -561,7 +564,7 @@ function renderTelemetry(sample) {
       ? `Rotor position ${rotorPosition.toFixed(1)} degrees; zero index ${sample.zeroSequence}; ${sample.zeroRejected} rejected bounce edges`
       : "Waiting for the first zero-index detection");
   $("zeroIndexStatus").textContent = rotorReferenced
-      ? `Zero #${sample.zeroSequence} · ${sample.zeroRejected} bounce rejected`
+      ? `Accepted zero #${sample.zeroSequence} · ${sample.zeroRejected} rejected edges`
       : "Waiting for zero index";
   renderEncoderCalibration();
   updateState(sample.state, sample.faults);
@@ -743,6 +746,7 @@ const parameterDefinitions = {
   currentFilterCutoffHz: { id: 29, decimals: 1, step: 0.1, min: 0.1, max: 200, description: "First-order current-sense low-pass cutoff in Hz; lower values reduce noise but delay overcurrent detection" },
   zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between zero-index rising edges in microseconds; closer edges are counted as bounce" },
   zeroIndexCorrectionGain: { id: 31, decimals: 3, step: 0.01, min: 0, max: 1, description: "Fraction of zero-index phase error corrected per accepted pulse; 0 trusts encoder counts only after initial reference, 1 snaps fully to every pulse" },
+  zeroIndexMinSeparationRevolutions: { id: 32, decimals: 2, step: 0.05, min: 0, max: 0.95, description: "Minimum rotor travel in revolutions before another zero edge can be accepted; 0 disables the encoder-distance bounce filter" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },

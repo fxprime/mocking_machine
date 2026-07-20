@@ -150,9 +150,22 @@ void test_velocity_estimator_uses_each_control_interval_count_delta() {
 }
 
 void test_zero_index_debounce_accepts_first_and_filters_close_rises() {
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(100000U, 0U, 5000U));
-  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(102000U, 100000U, 5000U));
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(105000U, 100000U, 5000U));
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+      100000U, 0U, 5000U, 100, 0, 0U));
+  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(
+      102000U, 100000U, 5000U, 100, 100, 0U));
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+      105000U, 100000U, 5000U, 100, 100, 0U));
+}
+
+void test_zero_index_rejects_late_bounce_without_rotor_travel() {
+  TEST_ASSERT_EQUAL_UINT32(92U, zeroIndexMinimumSeparationCounts(184U, 0.50F));
+  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(
+      106000U, 100000U, 5000U, 101, 100, 92U));
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+      106000U, 100000U, 5000U, 192, 100, 92U));
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+      106000U, 100000U, 5000U, 8, 100, 92U));
 }
 
 void test_rotor_phase_tracker_uses_encoder_after_first_zero_reference() {
@@ -224,12 +237,16 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(9U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(10U, settings.schema_version);
   TEST_ASSERT_EQUAL_UINT32(EncoderConfiguration::kDefaultZeroIndexMinimumIntervalUs,
                            settings.encoder.zero_index_min_interval_us);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F,
                            EncoderConfiguration::kDefaultZeroIndexCorrectionGain,
                            settings.encoder.zero_index_correction_gain);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F,
+      EncoderConfiguration::kDefaultZeroIndexMinimumSeparationRevolutions,
+      settings.encoder.zero_index_minimum_separation_revolutions);
 }
 
 void test_encoder_watchdog_grants_fresh_motion_demand_timeout() {
@@ -324,6 +341,7 @@ int main(int, char**) {
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
   RUN_TEST(test_zero_index_debounce_accepts_first_and_filters_close_rises);
+  RUN_TEST(test_zero_index_rejects_late_bounce_without_rotor_travel);
   RUN_TEST(test_rotor_phase_tracker_uses_encoder_after_first_zero_reference);
   RUN_TEST(test_rotor_phase_tracker_applies_fractional_correction_once_per_zero);
   RUN_TEST(test_sine_profile_stays_one_direction);

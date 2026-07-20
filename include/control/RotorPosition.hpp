@@ -8,9 +8,33 @@ namespace mm {
 
 __attribute__((always_inline)) inline bool shouldAcceptZeroIndexRise(
     const uint64_t timestamp_us, const uint64_t last_accepted_timestamp_us,
-    const uint32_t minimum_interval_us) {
-  return last_accepted_timestamp_us == 0U || timestamp_us < last_accepted_timestamp_us ||
-         timestamp_us - last_accepted_timestamp_us >= minimum_interval_us;
+    const uint32_t minimum_interval_us, const int64_t encoder_count,
+    const int64_t last_accepted_encoder_count,
+    const uint32_t minimum_separation_counts) {
+  if (last_accepted_timestamp_us == 0U) {
+    return true;
+  }
+  if (timestamp_us >= last_accepted_timestamp_us &&
+      timestamp_us - last_accepted_timestamp_us < minimum_interval_us) {
+    return false;
+  }
+  const uint64_t separation = encoder_count >= last_accepted_encoder_count
+      ? static_cast<uint64_t>(encoder_count) -
+            static_cast<uint64_t>(last_accepted_encoder_count)
+      : static_cast<uint64_t>(last_accepted_encoder_count) -
+            static_cast<uint64_t>(encoder_count);
+  return separation >= minimum_separation_counts;
+}
+
+inline uint32_t zeroIndexMinimumSeparationCounts(
+    const uint32_t counts_per_revolution,
+    const float minimum_separation_revolutions) {
+  if (counts_per_revolution == 0U || minimum_separation_revolutions <= 0.0F) {
+    return 0U;
+  }
+  const uint32_t separation = static_cast<uint32_t>(
+      static_cast<float>(counts_per_revolution) * minimum_separation_revolutions);
+  return separation == 0U ? 1U : separation;
 }
 
 class RotorPhaseTracker {

@@ -23,6 +23,9 @@ assert.ok(startAck >= 0 && closeAfterStart > startAck, "Editor must close only a
 assert.match(appSource, /currentSenseEnabled:\s*\{\s*id:\s*28,[^}]*min:\s*0,[^}]*max:\s*1/);
 assert.match(appSource, /currentFilterCutoffHz:\s*\{\s*id:\s*29,[^}]*min:\s*0\.1,[^}]*max:\s*200/);
 assert.match(appSource, /zeroIndexCorrectionGain:\s*\{\s*id:\s*31,[^}]*min:\s*0,[^}]*max:\s*1/);
+assert.match(appSource, /zeroIndexMinSeparationRevolutions:\s*\{\s*id:\s*32,[^}]*min:\s*0,[^}]*max:\s*0\.95/);
+assert.match(appSource, /Accepted zero #\$\{sample\.zeroSequence\}[^`]*\$\{sample\.zeroRejected\} rejected edges/,
+  "Rotor status must distinguish accepted zero events from rejected bounce edges");
 assert.match(appSource, /view\.setUint16\(0, parameterDefinitions\.cpr\.id, true\)/,
   "Encoder calibration must save through the validated CPR parameter path");
 assert.match(appSource, /typeof settings\[key\] === "boolean"\s*\?\s*\(settings\[key\] \? 1 : 0\)/);

@@ -50,8 +50,10 @@ Missed control ticks are never replayed against stale sensor data. The scheduler
 - `esp_timer_get_time()` supplies monotonic 64-bit microseconds.
 - Both quadrature channels use CHANGE interrupts and a 16-entry Gray-code transition table.
 - The zero-index interrupt accepts the first rising edge, rejects later edges inside the
-  configurable debounce interval, and atomically stores the accepted timestamp and encoder
-  count. Rejected zero edges never alter quadrature counting. The first accepted index creates
+  configurable debounce interval or before the encoder has travelled the configured fraction
+  of a revolution, and atomically stores the accepted timestamp and encoder count. Rejected
+  zero edges increment only their diagnostic counter and never increment the accepted zero
+  sequence or alter quadrature counting. The first accepted index creates
   the absolute phase reference; subsequent motion comes entirely from encoder-count changes.
   Later index events apply a configurable fraction of the measured phase error to a persistent
   offset, preventing long-term drift without allowing trigger jitter to replace encoder motion.

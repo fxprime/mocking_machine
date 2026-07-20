@@ -56,6 +56,16 @@ struct LegacyEncoderConfigurationV8 {
   uint32_t zero_index_min_interval_us;
 };
 
+struct LegacyEncoderConfigurationV9 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+  uint32_t estimator_stale_timeout_us;
+  uint32_t zero_index_min_interval_us;
+  float zero_index_correction_gain;
+};
+
 struct LegacyMotorCharacteristicsV6 {
   float start_duty_forward;
   float start_duty_reverse;
@@ -209,6 +219,32 @@ struct LegacyPersistedSettingsV8 {
   uint16_t crc;
 };
 
+struct LegacyMachineSettingsV9 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV9 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV9 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV9 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
               "Schema-v4 to v5 migration layout assumption changed");
@@ -221,8 +257,11 @@ static_assert(sizeof(LegacyMachineSettingsV6) + sizeof(float) ==
 static_assert(sizeof(LegacyMachineSettingsV7) + sizeof(uint32_t) ==
                   sizeof(LegacyMachineSettingsV8),
               "Schema-v7 to v8 migration layout assumption changed");
-static_assert(sizeof(LegacyMachineSettingsV8) + sizeof(float) == sizeof(MachineSettings),
+static_assert(sizeof(LegacyMachineSettingsV8) + sizeof(float) ==
+                  sizeof(LegacyMachineSettingsV9),
               "Schema-v8 to v9 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV9) + sizeof(float) == sizeof(MachineSettings),
+              "Schema-v9 to v10 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
                        ControlConfiguration& target) {
@@ -261,6 +300,17 @@ void copyLegacyEncoder(const LegacyEncoderConfigurationV8& source,
   target.estimator_max_window_us = source.estimator_max_window_us;
   target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
   target.zero_index_min_interval_us = source.zero_index_min_interval_us;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV9& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+  target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
+  target.zero_index_min_interval_us = source.zero_index_min_interval_us;
+  target.zero_index_correction_gain = source.zero_index_correction_gain;
 }
 
 void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
@@ -305,6 +355,7 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.motor.current_filter_cutoff_hz) ||
       !finite(settings.safety.encoder_timeout_velocity_rad_s) ||
       !finite(settings.encoder.zero_index_correction_gain) ||
+      !finite(settings.encoder.zero_index_minimum_separation_revolutions) ||
       !finite(settings.supply_voltage.divider_gain) ||
       !finite(settings.supply_voltage.input_offset_v) ||
       !finite(settings.safety.min_supply_voltage_v) ||
@@ -346,6 +397,10 @@ bool SettingsStore::validate(const MachineSettings& settings) {
           EncoderConfiguration::kMinimumZeroIndexCorrectionGain ||
       settings.encoder.zero_index_correction_gain >
           EncoderConfiguration::kMaximumZeroIndexCorrectionGain ||
+      settings.encoder.zero_index_minimum_separation_revolutions <
+          EncoderConfiguration::kMinimumZeroIndexMinimumSeparationRevolutions ||
+      settings.encoder.zero_index_minimum_separation_revolutions >
+          EncoderConfiguration::kMaximumZeroIndexMinimumSeparationRevolutions ||
       settings.safety.encoder_timeout_ms < 50U ||
       settings.safety.encoder_timeout_ms > 10000U ||
       settings.safety.encoder_timeout_velocity_rad_s <= 0.0F ||
@@ -428,6 +483,32 @@ bool SettingsStore::load(MachineSettings& settings) {
         validate(blob.payload)) {
       settings = blob.payload;
       loaded = true;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV9)) {
+    LegacyPersistedSettingsV9 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 9U && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV8)) {
     LegacyPersistedSettingsV8 blob{};
