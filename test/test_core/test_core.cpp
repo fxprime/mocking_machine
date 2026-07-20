@@ -5,6 +5,7 @@
 
 #include "control/IncrementalVelocityController.hpp"
 #include "control/CharacterizationMetrics.hpp"
+#include "control/CharacterizationDynamics.hpp"
 #include "control/CharacterizationSettings.hpp"
 #include "control/CurrentCalibration.hpp"
 #include "control/EncoderActivityWatchdog.hpp"
@@ -24,6 +25,27 @@ void test_crc_standard_vector() {
   TEST_ASSERT_EQUAL_HEX16(0x29B1, protocol::crc16CcittFalse(data.data(), data.size()));
 }
 
+void test_characterization_dynamics_estimates_constant_acceleration() {
+  characterization::DynamicsEstimator estimator;
+  estimator.configure(20.0F, 0.95F);
+  constexpr float dt_s = 0.002F;
+  constexpr float acceleration_rad_s2 = 10.0F;
+  for (uint32_t sample = 0U; sample < 1000U; ++sample) {
+    estimator.update(acceleration_rad_s2 * static_cast<float>(sample) * dt_s, dt_s);
+  }
+  TEST_ASSERT_TRUE(estimator.valid());
+  TEST_ASSERT_FLOAT_WITHIN(0.25F, acceleration_rad_s2, estimator.accelerationRadS2());
+  TEST_ASSERT_LESS_THAN_FLOAT(5.0F, estimator.jerkRadS3());
+}
+
+void test_characterization_dynamics_uses_robust_quantile() {
+  P2QuantileEstimator estimator;
+  estimator.configure(0.95F);
+  for (uint32_t sample = 0U; sample < 1000U; ++sample) estimator.add(10.0F);
+  estimator.add(10000.0F);
+  TEST_ASSERT_FLOAT_WITHIN(0.1F, 10.0F, estimator.value());
+}
+
 void test_create_profile_frame_crc_vector() {
   std::array<uint8_t, 8U + 169U> protected_bytes{};
   protected_bytes[0] = 1U;     // Protocol version.
@@ -36,6 +58,30 @@ void test_create_profile_frame_crc_vector() {
       0xA828U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
+void test_load_configuration_frame_crc_vector() {
+  std::array<uint8_t, 8U + 86U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x32U;  // SET_LOAD_CONFIGURATION 0x0132.
+  protected_bytes[3] = 0x01U;
+  protected_bytes[4] = 0x78U;
+  protected_bytes[5] = 0x56U;
+  protected_bytes[6] = 86U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xD9C3U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
+void test_characterization_result_frame_crc_vector() {
+  std::array<uint8_t, 8U + 32U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x10U;  // CHARACTERIZATION_RESULT 0x0310.
+  protected_bytes[3] = 0x03U;
+  protected_bytes[4] = 0xBCU;
+  protected_bytes[5] = 0x9AU;
+  protected_bytes[6] = 32U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xE045U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
 void test_telemetry_rate_respects_uart_bandwidth() {
   TEST_ASSERT_EQUAL_UINT16(84U, protocol::maximumTelemetryStreamRateHz(115200U));
   TEST_ASSERT_EQUAL_UINT16(84U, protocol::constrainTelemetryStreamRateHz(115200U, 200U));
@@ -44,7 +90,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(11U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(13U, MachineSettings::kSchemaVersion);
 }
 
 void test_incremental_controller_scales_integral_by_time() {
@@ -287,7 +333,8 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(11U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(13U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(12U, kMaximumLoads);
   TEST_ASSERT_EQUAL_UINT32(EncoderConfiguration::kDefaultZeroIndexMinimumIntervalUs,
                            settings.encoder.zero_index_min_interval_us);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F,
@@ -377,10 +424,39 @@ void test_characterization_never_raises_existing_vmax() {
                            candidate.safety.max_velocity_rad_s);
 }
 
+void test_characterization_dynamics_only_lowers_selected_limits() {
+  MachineSettings candidate{};
+  candidate.safety.max_acceleration_rad_s2 = 120.0F;
+  candidate.safety.max_jerk_rad_s3 = 800.0F;
+  candidate.profiles[0].kind = ProfileKind::Waypoints;
+  candidate.profiles[0].duration_ms = 2000U;
+  candidate.profiles[0].point_count = 3U;
+  candidate.profiles[0].points[0] = {0U, 0.0F};
+  candidate.profiles[0].points[1] = {1000U, 100.0F};
+  candidate.profiles[0].points[2] = {2000U, 0.0F};
+  CharacterizationDynamicsResult measured{};
+  measured.acceleration_forward_rad_s2 = 100.0F;
+  measured.acceleration_reverse_rad_s2 = 80.0F;
+  measured.jerk_forward_rad_s3 = 1500.0F;
+  measured.jerk_reverse_rad_s3 = 1200.0F;
+  TEST_ASSERT_TRUE(characterization::applyRecommendedDynamics(
+      measured, 0.70F, true, true, candidate));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 56.0F,
+                           candidate.safety.max_acceleration_rad_s2);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 800.0F,
+                           candidate.safety.max_jerk_rad_s3);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 56.0F,
+                           candidate.profiles[0].points[1].velocity_rad_s);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
+  RUN_TEST(test_characterization_dynamics_estimates_constant_acceleration);
+  RUN_TEST(test_characterization_dynamics_uses_robust_quantile);
   RUN_TEST(test_create_profile_frame_crc_vector);
+  RUN_TEST(test_load_configuration_frame_crc_vector);
+  RUN_TEST(test_characterization_result_frame_crc_vector);
   RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);
@@ -407,5 +483,6 @@ int main(int, char**) {
   RUN_TEST(test_characterization_peak_is_independent_of_encoder_polarity);
   RUN_TEST(test_characterization_clamps_vmax_and_dependent_settings);
   RUN_TEST(test_characterization_never_raises_existing_vmax);
+  RUN_TEST(test_characterization_dynamics_only_lowers_selected_limits);
   return UNITY_END();
 }

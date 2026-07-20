@@ -40,3 +40,28 @@ export function createTelemetryCsv(samples) {
   }
   return rows.join("\n");
 }
+
+export function createLoadConfigurationCsv(settingId, loads) {
+  const rows = ["load_setting_id,slot_id,position_deg,strength"];
+  for (const load of loads) {
+    rows.push([
+      integer(settingId), integer(load.slot), integer(load.position), decimal(load.strength, 0)
+    ].join(","));
+  }
+  return rows.join("\n");
+}
+
+export function defaultExportBaseName(date = new Date()) {
+  return `mocking-machine-run-${date.toISOString().replace(/[:.]/g, "-")}`;
+}
+
+export function sanitizeExportBaseName(value, fallback = defaultExportBaseName()) {
+  const sanitized = String(value ?? "")
+    .trim()
+    .replace(/\.csv$/i, "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 100);
+  return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : fallback;
+}

@@ -62,7 +62,7 @@ const MachineApplication::CommandDefinition MachineApplication::kCommands[] = {
      &MachineApplication::commandCurrent},
     {"voltage", "voltage <read|calibrate REFERENCE_V>",
      &MachineApplication::commandVoltage},
-    {"characterize", "characterize <start CONFIRM_UNLOADED|status|abort|save|discard>",
+    {"characterize", "characterize <start CONFIRM_UNLOADED|status|abort|save [dynamics]|discard>",
      &MachineApplication::commandCharacterize},
 };
 
@@ -215,14 +215,14 @@ void MachineApplication::commandProfile(const int argc, char* argv[]) {
     Serial.println("ERR usage: profile <list|select ID>");
     return;
   }
-  const uint16_t old_id = settings_.selected_profile_id;
-  settings_.selected_profile_id = static_cast<uint16_t>(id);
+  const uint16_t old_id = runtime_profile_id_;
+  runtime_profile_id_ = static_cast<uint16_t>(id);
   if (selectedProfile() == nullptr) {
-    settings_.selected_profile_id = old_id;
+    runtime_profile_id_ = old_id;
     Serial.println("ERR unknown profile");
     return;
   }
-  Serial.println("OK profile selected (use config save to persist)");
+  Serial.println("OK profile selected for the next run only");
 }
 
 void MachineApplication::commandConfig(const int argc, char* argv[]) {
@@ -386,14 +386,18 @@ void MachineApplication::commandVoltage(const int argc, char* argv[]) {
 
 void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
   if (argc == 2 && std::strcmp(argv[1], "status") == 0) {
-    Serial.printf("stage=%u pending=%s duty=%.3f velocity=%.3f start_fwd=%.3f start_rev=%.3f max_fwd=%.3f max_rev=%.3f\r\n",
+    Serial.printf("stage=%u pending=%s duty=%.3f velocity=%.3f start_fwd=%.3f start_rev=%.3f max_fwd=%.3f max_rev=%.3f accel_fwd=%.3f accel_rev=%.3f jerk_fwd=%.3f jerk_rev=%.3f\r\n",
                   static_cast<unsigned>(characterization_stage_),
                   characterization_result_pending_ ? "yes" : "no", characterization_duty_,
                   telemetry_.measured_velocity_rad_s,
                   characterization_candidate_.start_duty_forward,
                   characterization_candidate_.start_duty_reverse,
                   characterization_candidate_.max_velocity_forward_rad_s,
-                  characterization_candidate_.max_velocity_reverse_rad_s);
+                  characterization_candidate_.max_velocity_reverse_rad_s,
+                  characterization_dynamics_candidate_.acceleration_forward_rad_s2,
+                  characterization_dynamics_candidate_.acceleration_reverse_rad_s2,
+                  characterization_dynamics_candidate_.jerk_forward_rad_s3,
+                  characterization_dynamics_candidate_.jerk_reverse_rad_s3);
     return;
   }
   if (argc == 2 && std::strcmp(argv[1], "abort") == 0) {
@@ -410,11 +414,18 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
     Serial.println("OK characterization result discarded");
     return;
   }
-  if (argc == 2 && std::strcmp(argv[1], "save") == 0 &&
+  const bool save_characterization =
+      (argc == 2 || (argc == 3 && std::strcmp(argv[2], "dynamics") == 0)) &&
+      std::strcmp(argv[1], "save") == 0;
+  if (save_characterization &&
       characterization_result_pending_ && state_ == RunState::Disarmed) {
     MachineSettings candidate{};
     if (!characterization::prepareCharacterizedSettings(
             settings_, characterization_candidate_, candidate) ||
+        !characterization::applyRecommendedDynamics(
+            characterization_dynamics_candidate_,
+            settings_.characterization.recommendation_safety_factor,
+            argc == 3, argc == 3, candidate) ||
         !SettingsStore::validate(candidate)) {
       Serial.println("ERR characterization result is invalid");
       return;
@@ -441,6 +452,10 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
     return;
   }
   characterization_candidate_ = settings_.motor;
+  characterization_dynamics_candidate_ = {};
+  characterization_dynamics_estimator_.configure(
+      settings_.characterization.dynamics_filter_cutoff_hz,
+      settings_.characterization.dynamics_quantile);
   characterization_stage_ = CharacterizationStage::ForwardDeadband;
   characterization_status_pending_ = true;
   next_characterization_status_us_ = 0U;

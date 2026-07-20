@@ -1,21 +1,26 @@
 import { configurationPreparation, profilePreparation, resultDescription } from "./protocol-status.mjs";
 import { calculateStepMetrics, symmetricNiceLimit } from "./response-metrics.mjs";
 import { estimateClosedLoopStepResponse } from "./step-response-estimator.mjs";
-import { createTelemetryCsv } from "./csv-export.mjs";
+import { createLoadConfigurationCsv, createTelemetryCsv, defaultExportBaseName, sanitizeExportBaseName } from "./csv-export.mjs";
 import { updateRotorVisualState } from "./rotor-position.mjs";
 import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
 import { nextAvailableProfileId } from "./profile-collection.mjs";
 import { maximumTelemetryStreamRateHz } from "./serial-bandwidth.mjs";
 import { DeviceSynchronizer } from "./device-synchronizer.mjs";
+import { normalizeRotorLoads, slotPosition, synchronizeRotorLoadDraft, ROTOR_SLOT_COUNT } from "./rotor-load.mjs";
+import { machineStatusKey, shouldRefreshMachineUi } from "./machine-ui-state.mjs";
+import { RunRecorder } from "./run-recorder.mjs";
+import { readBaudPreference, writeBaudPreference } from "./baud-preference.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
 const deviceSynchronizer = new DeviceSynchronizer();
+const runRecorder = new RunRecorder();
 
 let port;
 let reader;
@@ -69,9 +74,23 @@ let currentCalibrationLastResult = 0;
 let currentCalibrationDriveActive = false;
 let currentCalibrationDriveArmPending = false;
 let currentCalibrationDriveTimer;
+let runtimeProfileId;
+let overviewRunAction;
+let defaultProfilePending;
+let loadConfiguration = [];
+let loadConfigurationSaved = [];
+let editingLoadSlot;
+let loadSavePending = false;
+let renderedMachineStatusKey;
+let recordedLoadConfiguration = [];
+let recordedLoadSettingId = 0;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const $ = id => document.getElementById(id);
+
+function localPreferenceStorage() {
+  try { return globalThis.localStorage; } catch { return undefined; }
+}
 
 function crc16(bytes) {
   let crc = 0xffff;
@@ -193,13 +212,18 @@ function handleMessage(id, data) {
       encoderDirection: data.byteLength >= 127 ? data.getInt8(126) : 1,
       zeroIndexMinSeparationRevolutions: data.byteLength >= 131
           ? data.getFloat32(127, true)
-          : 0.5
+          : 0.5,
+      characterizationDynamicsCutoffHz: data.byteLength >= 135 ? data.getFloat32(131, true) : 20,
+      characterizationDynamicsQuantile: data.byteLength >= 139 ? data.getFloat32(135, true) : 0.95,
+      characterizationSafetyFactor: data.byteLength >= 143 ? data.getFloat32(139, true) : 0.70
     };
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
+    if (runtimeProfileId === undefined) runtimeProfileId = settings.profileId;
     rotorVisualState = undefined;
     renderSettings();
     renderEncoderCalibration();
     renderProfiles();
+    renderRunProfileDialog();
     sendCurrentCalibrationCommand(CURRENT_CALIBRATION_ACTION.REQUEST_STATUS);
   } else if (id === MSG.PROFILE_CONFIGURATION) {
     const profile = decodeProfile(data);
@@ -207,9 +231,29 @@ function handleMessage(id, data) {
     if (existing >= 0) profiles[existing] = profile; else profiles.push(profile);
     profiles.sort((a, b) => a.id - b.id);
     renderProfiles();
+    renderRunProfileDialog();
+  } else if (id === MSG.LOAD_CONFIGURATION) {
+    const count = Math.min(ROTOR_SLOT_COUNT, data.getUint8(1));
+    const decoded = Array.from({ length: count }, (_, index) => ({
+      slot: data.getUint8(2 + index * 7),
+      position: data.getUint16(3 + index * 7, true),
+      strength: Math.round(data.getFloat32(5 + index * 7, true))
+    }));
+    try {
+      const synchronized = synchronizeRotorLoadDraft(
+        loadConfiguration, loadConfigurationSaved, decoded);
+      loadConfiguration = synchronized.draft;
+      loadConfigurationSaved = synchronized.saved;
+      renderRotorLoadSetup();
+    } catch (error) {
+      toast(`Firmware load configuration is invalid: ${error.message}`);
+    }
   } else if (id === MSG.TELEMETRY) {
     deviceSynchronizer.markTelemetryReceived();
     const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
+    const recordedSampleCount = runRecorder.samples.length;
+    runRecorder.consume(sample);
+    if (runRecorder.samples.length !== recordedSampleCount) updateExportButton();
     samples.push(sample); if (samples.length > 12000) samples.shift(); renderTelemetry(sample);
     renderProfileTestTelemetry(sample);
     renderTuningTelemetry(sample);
@@ -218,7 +262,14 @@ function handleMessage(id, data) {
       if (characterizationSamples.length > 4000) characterizationSamples.shift();
     }
   } else if (id === MSG.CHARACTERIZATION_RESULT) {
-    const result = { startForward: data.getFloat32(0, true), startReverse: data.getFloat32(4, true), maxForward: data.getFloat32(8, true), maxReverse: data.getFloat32(12, true) };
+    const result = {
+      startForward: data.getFloat32(0, true), startReverse: data.getFloat32(4, true),
+      maxForward: data.getFloat32(8, true), maxReverse: data.getFloat32(12, true),
+      accelerationForward: data.byteLength >= 32 ? data.getFloat32(16, true) : Number.NaN,
+      accelerationReverse: data.byteLength >= 32 ? data.getFloat32(20, true) : Number.NaN,
+      jerkForward: data.byteLength >= 32 ? data.getFloat32(24, true) : Number.NaN,
+      jerkReverse: data.byteLength >= 32 ? data.getFloat32(28, true) : Number.NaN
+    };
     renderCharacterizationResult(result);
   } else if (id === MSG.CHARACTERIZATION_STATUS) {
     renderCharacterizationStatus({ stage: data.getUint8(0), resultPending: data.getUint8(1) !== 0, duty: data.getFloat32(2, true), velocity: data.getFloat32(6, true) });
@@ -232,6 +283,75 @@ function handleMessage(id, data) {
   } else if (id === MSG.ACK) {
     const request = data.getUint16(0, true);
     const result = data.getUint8(2);
+    if (result === 0 && (request === MSG.START_RUN || request === MSG.START_VELOCITY_TEST)) {
+      runRecorder.begin();
+      recordedLoadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
+      recordedLoadSettingId = Number(settings.loadSetting) || 0;
+      updateExportButton();
+    }
+    if (request === MSG.ARM && overviewRunAction?.stage === "arm") {
+      overviewRunAction = undefined;
+      if (result === 0) {
+        latestState = 1;
+        toast("Motor output armed. Select a profile and press Run when the rig is safe.");
+      } else toast(`Could not arm: ${resultDescription(result)}.`);
+      renderRunProfileDialog();
+      return;
+    }
+    if (request === MSG.SELECT_PROFILE && overviewRunAction) {
+      const action = overviewRunAction;
+      if (result !== 0) {
+        overviewRunAction = undefined;
+        toast(`Could not select profile: ${resultDescription(result)}.`);
+      } else {
+        runtimeProfileId = action.profileId;
+        if (action.stage === "run-select") {
+          action.stage = "run-start";
+          $("runProfileStatus").textContent = "Profile selected for this run. Starting…";
+          sendFrame(MSG.START_RUN);
+        } else {
+          overviewRunAction = undefined;
+          toast("Profile selected for the next run; saved default unchanged.");
+        }
+      }
+      renderProfiles();
+      return;
+    }
+    if (request === MSG.START_RUN && overviewRunAction?.stage === "run-start") {
+      overviewRunAction = undefined;
+      if (result === 0) {
+        $("runProfileDialog").close("run");
+        toast("Profile run started.");
+      } else {
+        $("runProfileStatus").textContent = `Run rejected: ${resultDescription(result)}.`;
+        toast(`Run rejected: ${resultDescription(result)}.`);
+      }
+      renderRunProfileDialog();
+      return;
+    }
+    if (request === MSG.SET_DEFAULT_PROFILE && defaultProfilePending !== undefined) {
+      const profileId = defaultProfilePending;
+      defaultProfilePending = undefined;
+      if (result === 0) {
+        settings.profileId = profileId;
+        runtimeProfileId = profileId;
+        toast("Default profile saved to this device.");
+      } else toast(`Default profile was not saved: ${resultDescription(result)}.`);
+      renderProfiles();
+      return;
+    }
+    if (request === MSG.SET_LOAD_CONFIGURATION && loadSavePending) {
+      loadSavePending = false;
+      if (result === 0) {
+        loadConfigurationSaved = loadConfiguration.map(load => ({ ...load }));
+        toast("Rotor load change saved.");
+      } else {
+        loadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
+        toast(`Load change was rejected and rolled back: ${resultDescription(result)}.`);
+      }
+      renderRotorLoadSetup();
+      return;
+    }
     if (request === MSG.CURRENT_CALIBRATION) {
       const action = currentCalibrationPendingAction;
       currentCalibrationPendingAction = undefined;
@@ -479,7 +599,7 @@ function handleMessage(id, data) {
     }
     if (request === MSG.SELECT_PROFILE && profileAction?.stage === "select") {
       if (result === 0) {
-        settings.profileId = profileAction.profileId;
+        runtimeProfileId = profileAction.profileId;
         profileAction.stage = "arm";
         $("profileRunCommandStatus").textContent = "Profile selected. Confirming firmware arm state…";
         sendFrame(MSG.ARM);
@@ -495,7 +615,7 @@ function handleMessage(id, data) {
     }
     if (request === MSG.SELECT_PROFILE && tuningAction?.stage === "select") {
       if (result === 0) {
-        settings.profileId = tuningAction.profileId;
+        runtimeProfileId = tuningAction.profileId;
         renderProfiles();
         tuningAction.stage = "arm";
         sendFrame(MSG.ARM);
@@ -571,7 +691,7 @@ function setConnected(value) {
   $("connectionState").textContent = value ? "● Connected" : "● Disconnected";
   $("connectionState").className = `status-badge ${value ? "online" : "offline"}`;
   $("connectButton").textContent = value ? "Disconnect" : "Connect";
-  for (const id of ["stopButton", "armButton", "runButton", "exportButton", "loadGains", "saveConfig", "characterizeButton", "openVinCalibration", "saveDriverDiagnostic", "saveCurrentSense", "startMotorTest", "stopMotorTest", "startTuningTest", "sendTerminal"]) $(id).disabled = !value;
+  for (const id of ["stopButton", "armButton", "runButton", "loadGains", "saveConfig", "characterizeButton", "openVinCalibration", "saveDriverDiagnostic", "saveCurrentSense", "startMotorTest", "stopMotorTest", "startTuningTest", "sendTerminal"]) $(id).disabled = !value;
   $("saveProfile").disabled = !value;
   $("runProfileTest").disabled = !value;
   renderProfiles();
@@ -580,11 +700,16 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); finishProfileAction(); motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  updateExportButton();
+  renderRunProfileDialog();
+  renderRotorLoadSetup();
   renderEncoderCalibration();
 }
 
 function updateState(state, faults) {
+  const refreshInteractiveState = shouldRefreshMachineUi(renderedMachineStatusKey, state, faults);
+  renderedMachineStatusKey = machineStatusKey(state, faults);
   latestState = state;
   latestFaults = faults;
   if (state !== 0 && (encoderCalibrationStartCount !== undefined || encoderCalibrationCandidate)) {
@@ -598,6 +723,42 @@ function updateState(state, faults) {
   const faultNames = [[1, "control overrun"], [2, "driver diagnostic"], [4, "overcurrent"], [8, "encoder timeout"], [16, "invalid configuration"], [32, "VIN undervoltage"], [64, "VIN overvoltage"]];
   const activeFaults = faultNames.filter(([bit]) => faults & bit).map(([, name]) => name);
   $("faultText").textContent = activeFaults.length ? `${activeFaults.join(", ")} (0x${faults.toString(16).padStart(8, "0")})` : "";
+  if (refreshInteractiveState) {
+    renderProfiles();
+    renderRunProfileDialog();
+    renderRotorLoadSetup();
+  }
+}
+
+function updateExportButton() {
+  $("exportButton").disabled = !connected || runRecorder.samples.length === 0;
+  $("exportButton").title = runRecorder.samples.length
+    ? `${runRecorder.samples.length} samples from the latest run`
+    : "Run a profile or response test before exporting.";
+}
+
+function exportBaseName() {
+  return sanitizeExportBaseName($("exportBaseName").value, "mocking-machine-run");
+}
+
+function updateExportFileSummary() {
+  const baseName = exportBaseName();
+  const files = [`${baseName}.csv`];
+  if (recordedLoadConfiguration.length) files.push(`${baseName}-loads.csv`);
+  $("exportFileSummary").textContent = recordedLoadConfiguration.length
+    ? `Two files will be downloaded: ${files.join(" and ")}. Your browser may ask to allow multiple downloads.`
+    : `One file will be downloaded: ${files[0]}. No saved rotor loads were active for this run.`;
+}
+
+function downloadCsv(fileName, contents) {
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([contents], { type: "text/csv;charset=utf-8" }));
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderTelemetry(sample) {
@@ -809,6 +970,9 @@ const parameterDefinitions = {
   zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between zero-index rising edges in microseconds; closer edges are counted as bounce" },
   zeroIndexCorrectionGain: { id: 31, decimals: 3, step: 0.01, min: 0, max: 1, description: "Fraction of zero-index phase error corrected per accepted pulse; 0 trusts encoder counts only after initial reference, 1 snaps fully to every pulse" },
   zeroIndexMinSeparationRevolutions: { id: 32, decimals: 2, step: 0.05, min: 0, max: 0.95, description: "Minimum rotor travel in revolutions before another zero edge can be accepted; 0 disables the encoder-distance bounce filter" },
+  characterizationDynamicsCutoffHz: { id: 33, decimals: 1, step: 0.5, min: 0.5, max: 100, description: "Low-pass cutoff used before calculating characterization acceleration and jerk" },
+  characterizationDynamicsQuantile: { id: 34, decimals: 3, step: 0.01, min: 0.80, max: 0.99, description: "Robust quantile used instead of a noise-sensitive single acceleration or jerk peak" },
+  characterizationSafetyFactor: { id: 35, decimals: 2, step: 0.05, min: 0.10, max: 1, description: "Multiplier applied to the weaker measured direction when recommending acceleration and jerk limits" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },
@@ -979,6 +1143,111 @@ function decodeProfile(data) {
   };
 }
 
+const loadColors = ["#4ec3e0", "#f0b84a", "#58d69d", "#b58cff", "#ff7a90", "#77a6ff", "#e88de7", "#a9d45b", "#ff9d57", "#45d4c5", "#d8c65a", "#9e93ff"];
+
+function renderRotorLoadSetup() {
+  const loadEditingEnabled = connected && latestState === 0 && !loadSavePending;
+  const bySlot = new Map(loadConfiguration.map(load => [load.slot, load]));
+  const slots = Array.from({ length: ROTOR_SLOT_COUNT }, (_, slot) => {
+    const point = slotPosition(slot);
+    const load = bySlot.get(slot);
+    const color = load ? loadColors[slot] : "#6e7c85";
+    const dx = 210 - point.x, dy = 210 - point.y;
+    const length = load ? 18 + load.strength * 4 : 0;
+    const magnitude = Math.hypot(dx, dy) || 1;
+    const arrowX = point.x + dx / magnitude * length;
+    const arrowY = point.y + dy / magnitude * length;
+    const badgeX = point.x - dx / magnitude * 34;
+    const badgeY = point.y - dy / magnitude * 34;
+    return `<g class="rotor-slot" data-slot="${slot}" tabindex="0" role="button" aria-disabled="${!loadEditingEnabled}" aria-label="${slot * 30} degree slot, ${load ? `strength ${load.strength}` : "empty"}" style="color:${color}">
+      <circle class="slot-hit" cx="${point.x}" cy="${point.y}" r="34"/>
+      <circle class="slot-hole" cx="${point.x}" cy="${point.y}" r="24" ${load ? `style="fill:${color}33;stroke:${color}"` : ""}/>
+      ${load ? `<line class="strength-arrow" x1="${point.x}" y1="${point.y}" x2="${arrowX}" y2="${arrowY}"/><circle class="slot-badge" cx="${badgeX}" cy="${badgeY}" r="15"/><text x="${badgeX}" y="${badgeY}">${load.strength}</text>` : ""}
+    </g>`;
+  }).join("");
+  $("rotorLoadDiagram").innerHTML = `<defs><marker id="loadArrow" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="context-stroke"/></marker></defs>
+    <circle cx="210" cy="210" r="196" fill="#89918f" stroke="#d5dcda" stroke-width="2"/>
+    <circle cx="210" cy="210" r="92" fill="#c7c9c3" stroke="#111820" stroke-width="5"/>
+    <circle cx="210" cy="210" r="50" fill="#0b1015" stroke="#6e7c85" stroke-width="3"/>
+    <path d="M210 116 V304 M116 210 H304" stroke="#44515a" stroke-width="1" stroke-dasharray="5 6"/>
+    ${slots}`;
+  $("rotorLoadDiagram").querySelectorAll(".rotor-slot").forEach(element => {
+    const open = () => openLoadSlotEditor(Number(element.dataset.slot));
+    element.addEventListener("click", open);
+    element.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+    });
+  });
+  $("loadSetupStatus").textContent = loadSavePending
+    ? "Saving…"
+    : `${loadConfiguration.length} active slot${loadConfiguration.length === 1 ? "" : "s"}`;
+  $("loadSetupStatus").className = `status-badge ${loadSavePending ? "offline" : loadConfiguration.length ? "online" : "offline"}`;
+  $("loadSlotList").innerHTML = loadConfiguration.length
+    ? loadConfiguration.map(load => `<span class="load-slot-chip" style="color:${loadColors[load.slot]}"><i></i>${load.position}° · strength ${load.strength}</span>`).join("")
+    : '<p class="hint">No load positions configured.</p>';
+}
+
+function openLoadSlotEditor(slot) {
+  if (!connected) return toast("Connect to the firmware before changing the load setup.");
+  if (latestState !== 0) return toast("Disarm the machine before changing the load setup.");
+  if (loadSavePending) return toast("Wait for the current load change to finish saving.");
+  editingLoadSlot = slot;
+  const existing = loadConfiguration.find(load => load.slot === slot);
+  $("loadSlotPosition").textContent = slot * 30;
+  $("loadSlotStrength").value = existing?.strength ?? 1;
+  $("loadSlotStrengthValue").value = existing?.strength ?? 1;
+  $("loadSlotStrengthValue").textContent = existing?.strength ?? 1;
+  $("removeLoadSlot").disabled = !existing;
+  $("loadSlotDialog").showModal();
+}
+
+function encodeLoadConfiguration() {
+  const payload = new Uint8Array(86), view = new DataView(payload.buffer);
+  view.setUint8(0, ((Number(settings.loadSetting) || 0) + 1) & 0xff);
+  view.setUint8(1, loadConfiguration.length);
+  loadConfiguration.forEach((load, index) => {
+    view.setUint8(2 + index * 7, load.slot);
+    view.setUint16(3 + index * 7, load.position, true);
+    view.setFloat32(5 + index * 7, load.strength, true);
+  });
+  return payload;
+}
+
+async function persistLoadConfiguration() {
+  if (!connected || !writer || latestState !== 0 || loadSavePending) {
+    loadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
+    renderRotorLoadSetup();
+    return;
+  }
+  loadSavePending = true;
+  renderRotorLoadSetup();
+  try {
+    await sendFrame(MSG.SET_LOAD_CONFIGURATION, encodeLoadConfiguration());
+  } catch (error) {
+    loadSavePending = false;
+    loadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
+    renderRotorLoadSetup();
+    toast(`Could not save load change: ${error.message}`);
+  }
+}
+
+function renderRunProfileDialog() {
+  if (!$("runProfileSelect")) return;
+  const previous = $("runProfileSelect").value;
+  $("runProfileSelect").innerHTML = profiles.length
+    ? profiles.map(profile => `<option value="${profile.id}">${escapeHtml(profile.name)}${profile.id === settings.profileId ? " · default" : ""}</option>`).join("")
+    : '<option value="">No profiles available</option>';
+  const preferred = profiles.some(profile => String(profile.id) === previous)
+    ? previous : String(runtimeProfileId ?? settings.profileId ?? "");
+  $("runProfileSelect").value = preferred;
+  const armed = latestState === 1;
+  $("runDialogArm").disabled = !connected || armed || latestState !== 0 || latestFaults !== 0 || Boolean(overviewRunAction);
+  $("runDialogArm").textContent = armed ? "Armed" : "Arm output";
+  $("runDialogArmHint").textContent = armed ? "Output is armed. Verify the guard before running." : "The machine must be armed before Run is enabled.";
+  $("confirmRunProfile").disabled = !connected || !armed || !profiles.length || Boolean(overviewRunAction);
+  $("setDefaultProfile").disabled = !connected || latestState !== 0 || !profiles.length || Boolean(defaultProfilePending);
+}
+
 function renderProfiles() {
   if (!$("profileRows")) return;
   const full = profiles.length >= MAX_PROFILES;
@@ -1000,10 +1269,24 @@ function renderProfiles() {
     return;
   }
   const kinds = ["Ramp", "Sine", "Waypoints"];
-  $("profileRows").innerHTML = profiles.map(profile => `<tr><td>${profile.id}</td><td>${escapeHtml(profile.name)}</td><td>${kinds[profile.kind] ?? "Unknown"}</td><td>${formatNumber(profile.durationMs / 1000, 2)} s</td><td>${profile.id === settings.profileId ? "Selected" : "Available"}</td><td><button class="edit-profile" data-profile-id="${profile.id}">Edit</button></td></tr>`).join("");
+  $("profileRows").innerHTML = profiles.map(profile => {
+    const labels = [profile.id === settings.profileId ? "Default" : "", profile.id === runtimeProfileId ? "Next run" : ""].filter(Boolean).join(" · ") || "Available";
+    const selectDisabled = profile.id === runtimeProfileId || !connected || latestState === 2 || latestState === 3 || Boolean(overviewRunAction);
+    return `<tr><td>${profile.id}</td><td>${escapeHtml(profile.name)}</td><td>${kinds[profile.kind] ?? "Unknown"}</td><td>${formatNumber(profile.durationMs / 1000, 2)} s</td><td>${labels}</td><td><div class="action-row"><button class="select-profile" data-profile-id="${profile.id}" ${selectDisabled ? "disabled" : ""}>Select</button><button class="edit-profile" data-profile-id="${profile.id}">Edit</button></div></td></tr>`;
+  }).join("");
   const previous = $("tuningProfileSelect").value;
   $("tuningProfileSelect").innerHTML = profiles.map(profile => `<option value="${profile.id}">${escapeHtml(profile.name)} · ${formatNumber(profile.durationMs / 1000, 2)} s</option>`).join("");
-  $("tuningProfileSelect").value = profiles.some(profile => String(profile.id) === previous) ? previous : String(settings.profileId);
+  $("tuningProfileSelect").value = profiles.some(profile => String(profile.id) === previous) ? previous : String(runtimeProfileId ?? settings.profileId);
+  document.querySelectorAll(".select-profile").forEach(button => button.addEventListener("click", async () => {
+    if (overviewRunAction) return;
+    const profileId = Number(button.dataset.profileId);
+    const payload = new Uint8Array(2); new DataView(payload.buffer).setUint16(0, profileId, true);
+    button.disabled = true;
+    overviewRunAction = { stage: "profile-tab-select", profileId };
+    renderProfiles();
+    await sendFrame(MSG.SELECT_PROFILE, payload);
+  }));
+  renderRunProfileDialog();
 }
 
 function finishProfileAction() {
@@ -1472,6 +1755,31 @@ function renderCharacterizationResult(result) {
       characterizedVmax < configuredVmax
       ? `clamped from ${formatNumber(configuredVmax, 2)} rad/s`
       : "configured vmax already lower";
+  const safetyFactor = Number(settings.characterizationSafetyFactor) || 0.70;
+  const recommendedAcceleration = safetyFactor * Math.min(
+    Math.abs(result.accelerationForward), Math.abs(result.accelerationReverse));
+  const recommendedJerk = safetyFactor * Math.min(
+    Math.abs(result.jerkForward), Math.abs(result.jerkReverse));
+  const accelerationValid = Number.isFinite(recommendedAcceleration) && recommendedAcceleration > 0;
+  const jerkValid = Number.isFinite(recommendedJerk) && recommendedJerk > 0;
+  $("resultAccelerationForward").textContent = accelerationValid ? formatNumber(result.accelerationForward, 2) : "—";
+  $("resultAccelerationReverse").textContent = accelerationValid ? formatNumber(result.accelerationReverse, 2) : "—";
+  $("resultJerkForward").textContent = jerkValid ? formatNumber(result.jerkForward, 1) : "—";
+  $("resultJerkReverse").textContent = jerkValid ? formatNumber(result.jerkReverse, 1) : "—";
+  $("resultRecommendedAcceleration").textContent = accelerationValid ? formatNumber(recommendedAcceleration, 2) : "—";
+  $("resultRecommendedJerk").textContent = jerkValid ? formatNumber(recommendedJerk, 1) : "—";
+  const accelerationWouldLower = accelerationValid && recommendedAcceleration < Number(settings.amax);
+  const jerkWouldLower = jerkValid && recommendedJerk < Number(settings.jmax);
+  $("applyCharacterizedAcceleration").checked = false;
+  $("applyCharacterizedAcceleration").disabled = !accelerationWouldLower;
+  $("applyCharacterizedJerk").checked = false;
+  $("applyCharacterizedJerk").disabled = !jerkWouldLower;
+  $("resultAccelerationRecommendationDetail").textContent = accelerationWouldLower
+    ? `current ${formatNumber(settings.amax, 2)} rad/s² · ${formatNumber(safetyFactor * 100, 0)}% safety factor`
+    : "configured acceleration is already lower";
+  $("resultJerkRecommendationDetail").textContent = jerkWouldLower
+    ? `current ${formatNumber(settings.jmax, 1)} rad/s³ · ${formatNumber(safetyFactor * 100, 0)}% safety factor`
+    : "configured jerk is already lower";
   $("saveCharacterization").disabled = false;
   $("discardCharacterization").disabled = false;
   characterizationRunning = false;
@@ -1504,7 +1812,11 @@ async function submitCharacterizationAction(action) {
   characterizationAction = action;
   $("saveCharacterization").disabled = true;
   $("discardCharacterization").disabled = true;
-  await sendFrame(MSG.CHARACTERIZATION_ACTION, Uint8Array.of(action === "save" ? 1 : 0));
+  const flags = action === "save"
+    ? 1 | ($("applyCharacterizedAcceleration").checked ? 2 : 0) |
+        ($("applyCharacterizedJerk").checked ? 4 : 0)
+    : 0;
+  await sendFrame(MSG.CHARACTERIZATION_ACTION, Uint8Array.of(flags));
 }
 
 function drawChart() {
@@ -1762,9 +2074,64 @@ $("profileEditorChart").addEventListener("keydown", event => {
   setSelectedProfilePoint(time, velocity);
 });
 $("connectButton").addEventListener("click", connect);
+$("baud").value = String(readBaudPreference(localPreferenceStorage()));
+$("baud").addEventListener("change", () => {
+  writeBaudPreference(localPreferenceStorage(), $("baud").value);
+});
 $("stopButton").addEventListener("click", () => stopAllManualOutputs(true));
 $("armButton").addEventListener("click", async () => { if (await confirmSafety("Verify the rotor guard is closed, the emergency stop works, and the area is clear. Arming permits PWM output.")) await sendAscii("arm"); });
-$("runButton").addEventListener("click", async () => { if (await confirmSafety("The selected profile will rotate the unbalanced load. Confirm the load setting matches the physical rotor and the guard is closed.")) await sendFrame(MSG.START_RUN); });
+$("runButton").addEventListener("click", () => {
+  $("runProfileStatus").textContent = "";
+  renderRunProfileDialog();
+  $("runProfileDialog").showModal();
+});
+$("runDialogArm").addEventListener("click", async () => {
+  if (!await confirmSafety("Verify the configured load positions match the physical rotor, the guard is closed, and the emergency stop is accessible.")) return;
+  overviewRunAction = { stage: "arm" };
+  renderRunProfileDialog();
+  await sendFrame(MSG.ARM);
+});
+$("confirmRunProfile").addEventListener("click", async () => {
+  const profileId = Number($("runProfileSelect").value);
+  if (!Number.isInteger(profileId) || latestState !== 1 || overviewRunAction) return;
+  overviewRunAction = { stage: "run-select", profileId };
+  $("runProfileStatus").textContent = "Selecting profile for this run…";
+  renderRunProfileDialog();
+  const payload = new Uint8Array(2); new DataView(payload.buffer).setUint16(0, profileId, true);
+  await sendFrame(MSG.SELECT_PROFILE, payload);
+});
+$("setDefaultProfile").addEventListener("click", async () => {
+  const profileId = Number($("runProfileSelect").value);
+  if (!Number.isInteger(profileId) || latestState !== 0 || defaultProfilePending !== undefined) return;
+  defaultProfilePending = profileId;
+  renderRunProfileDialog();
+  const payload = new Uint8Array(2); new DataView(payload.buffer).setUint16(0, profileId, true);
+  await sendFrame(MSG.SET_DEFAULT_PROFILE, payload);
+});
+$("runProfileSelect").addEventListener("change", () => {
+  $("runProfileStatus").textContent = Number($("runProfileSelect").value) === settings.profileId
+    ? "Saved default selected." : "Temporary selection; saved default is unchanged.";
+});
+$("loadSlotStrength").addEventListener("input", () => {
+  $("loadSlotStrengthValue").value = $("loadSlotStrength").value;
+  $("loadSlotStrengthValue").textContent = $("loadSlotStrength").value;
+});
+$("applyLoadSlot").addEventListener("click", async () => {
+  const strength = Number($("loadSlotStrength").value);
+  loadConfiguration = normalizeRotorLoads([
+    ...loadConfiguration.filter(load => load.slot !== editingLoadSlot),
+    { slot: editingLoadSlot, strength }
+  ]);
+  $("loadSlotDialog").close("apply");
+  renderRotorLoadSetup();
+  await persistLoadConfiguration();
+});
+$("removeLoadSlot").addEventListener("click", async () => {
+  loadConfiguration = loadConfiguration.filter(load => load.slot !== editingLoadSlot);
+  $("loadSlotDialog").close("remove");
+  renderRotorLoadSetup();
+  await persistLoadConfiguration();
+});
 $("loadGains").addEventListener("click", async () => {
   if (pendingGains) return;
   if (latestState === 2 || latestState === 3 || characterizationRunning) return toast("Stop the machine and clear faults before applying gains.");
@@ -1840,7 +2207,29 @@ $("startMotorTest").addEventListener("click", startMotorTest);
 $("stopMotorTest").addEventListener("click", () => stopMotorTest(true));
 $("terminalForm").addEventListener("submit", async event => { event.preventDefault(); const input = $("terminalInput"); if (input.value.trim()) { appendTerminal(`> ${input.value}\n`); await sendAscii(input.value.trim()); input.value = ""; } });
 $("clearTerminal").addEventListener("click", () => { textRx = ""; $("terminalOutput").textContent = ""; });
-$("exportButton").addEventListener("click", () => { const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([createTelemetryCsv(samples)], { type: "text/csv" })); link.download = `mocking-machine-${new Date().toISOString().replaceAll(":", "-")}.csv`; link.click(); URL.revokeObjectURL(link.href); });
+$("exportButton").addEventListener("click", () => {
+  if (!runRecorder.samples.length) return;
+  $("exportBaseName").value = defaultExportBaseName();
+  updateExportFileSummary();
+  $("exportDialog").showModal();
+  $("exportBaseName").focus();
+  $("exportBaseName").select();
+});
+$("exportBaseName").addEventListener("input", updateExportFileSummary);
+$("exportForm").addEventListener("submit", event => {
+  if (event.submitter?.value !== "export") return;
+  event.preventDefault();
+  const baseName = exportBaseName();
+  downloadCsv(`${baseName}.csv`, createTelemetryCsv(runRecorder.samples));
+  if (recordedLoadConfiguration.length) {
+    downloadCsv(`${baseName}-loads.csv`,
+      createLoadConfigurationCsv(recordedLoadSettingId, recordedLoadConfiguration));
+  }
+  $("exportDialog").close("export");
+  toast(recordedLoadConfiguration.length
+    ? "Run data and rotor load information exported."
+    : "Run data exported.");
+});
 window.addEventListener("beforeunload", () => { clearInterval(motorTestTimer); clearInterval(currentCalibrationDriveTimer); if (connected) sendFrame(MSG.STOP_RUN); });
 setMotorTestDuty(0.10);
 setCurrentCalibrationDuty(0.10);
@@ -1850,3 +2239,5 @@ drawProfileTestChart();
 drawTuningChart();
 drawEstimatedStepChart();
 drawPidOutputChart();
+renderRotorLoadSetup();
+renderRunProfileDialog();

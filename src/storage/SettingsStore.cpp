@@ -13,6 +13,21 @@ constexpr uint32_t kSettingsMagic = 0x4D4D4346U;  // MMCF
 constexpr char kNamespace[] = "mmachine";
 constexpr char kBlobKey[] = "settings";
 
+struct LegacyMachineLoadSettingV11 {
+  uint8_t setting_id;
+  uint8_t count;
+  std::array<LoadEntry, 8> loads;
+};
+
+struct LegacyCharacterizationConfigurationV12 {
+  float duty_step;
+  float motion_threshold_rad_s;
+  uint16_t settle_ms;
+  uint16_t reversal_pause_ms;
+  uint16_t maximum_hold_ms;
+  uint8_t consecutive_motion_samples;
+};
+
 struct PersistedSettings {
   uint32_t magic = kSettingsMagic;
   uint32_t schema_version = MachineSettings::kSchemaVersion;
@@ -98,8 +113,8 @@ struct LegacyMachineSettingsV4 {
   LegacySafetyConfigurationV4 safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV5 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -124,8 +139,8 @@ struct LegacyMachineSettingsV5 {
   SafetyConfiguration safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV5 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -150,8 +165,8 @@ struct LegacyMachineSettingsV6 {
   SafetyConfiguration safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV7 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -176,8 +191,8 @@ struct LegacyMachineSettingsV7 {
   SafetyConfiguration safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV7 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -202,8 +217,8 @@ struct LegacyMachineSettingsV8 {
   SafetyConfiguration safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV8 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -228,8 +243,8 @@ struct LegacyMachineSettingsV9 {
   SafetyConfiguration safety;
   SerialConfiguration serial;
   LegacyEncoderConfigurationV9 encoder;
-  CharacterizationConfiguration characterization;
-  MachineLoadSetting load_setting;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
   uint8_t profile_count;
   uint16_t selected_profile_id;
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
@@ -242,6 +257,58 @@ struct LegacyPersistedSettingsV9 {
   uint32_t schema_version;
   uint32_t payload_size;
   LegacyMachineSettingsV9 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV11 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  LegacyCharacterizationConfigurationV12 characterization;
+  LegacyMachineLoadSettingV11 load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV11 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV11 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV12 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  LegacyCharacterizationConfigurationV12 characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV12 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV12 payload;
   uint16_t crc;
 };
 
@@ -260,8 +327,15 @@ static_assert(sizeof(LegacyMachineSettingsV7) + sizeof(uint32_t) ==
 static_assert(sizeof(LegacyMachineSettingsV8) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV9),
               "Schema-v8 to v9 migration layout assumption changed");
-static_assert(sizeof(LegacyMachineSettingsV9) + sizeof(float) == sizeof(MachineSettings),
+static_assert(sizeof(LegacyMachineSettingsV9) + sizeof(float) ==
+                  sizeof(LegacyMachineSettingsV11),
               "Schema-v9 to v10 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV11) + 4U * sizeof(LoadEntry) ==
+                  sizeof(LegacyMachineSettingsV12),
+              "Schema-v11 to v12 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV12) + 3U * sizeof(float) ==
+                  sizeof(MachineSettings),
+              "Schema-v12 to v13 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
                        ControlConfiguration& target) {
@@ -321,6 +395,41 @@ void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
   target.max_velocity_reverse_rad_s = source.max_velocity_reverse_rad_s;
   target.current_gain_a_per_v = source.current_gain_a_per_v;
   target.current_offset_v = source.current_offset_v;
+}
+
+void copyLegacyLoad(const LegacyMachineLoadSettingV11& source,
+                    MachineLoadSetting& target) {
+  target = {};
+  target.setting_id = source.setting_id;
+  const uint8_t source_count = source.count > source.loads.size()
+                                   ? static_cast<uint8_t>(source.loads.size())
+                                   : source.count;
+  bool occupied[kRotorSlotCount]{};
+  for (uint8_t index = 0; index < source_count; ++index) {
+    const auto& legacy = source.loads[index];
+    if (legacy.position_deg >= 360U || legacy.position_deg % 30U != 0U ||
+        !std::isfinite(legacy.strength) || legacy.strength < 1.0F ||
+        legacy.strength > 10.0F) {
+      continue;
+    }
+    const uint8_t slot = static_cast<uint8_t>(legacy.position_deg / 30U);
+    if (occupied[slot]) {
+      continue;
+    }
+    occupied[slot] = true;
+    target.loads[target.count++] = {slot, legacy.position_deg, legacy.strength};
+  }
+}
+
+void copyLegacyCharacterization(
+    const LegacyCharacterizationConfigurationV12& source,
+    CharacterizationConfiguration& target) {
+  target.duty_step = source.duty_step;
+  target.motion_threshold_rad_s = source.motion_threshold_rad_s;
+  target.settle_ms = source.settle_ms;
+  target.reversal_pause_ms = source.reversal_pause_ms;
+  target.maximum_hold_ms = source.maximum_hold_ms;
+  target.consecutive_motion_samples = source.consecutive_motion_samples;
 }
 }
 
@@ -411,11 +520,32 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       settings.characterization.settle_ms < 50U ||
       settings.characterization.reversal_pause_ms < 250U ||
       settings.characterization.maximum_hold_ms < 250U ||
-      settings.characterization.consecutive_motion_samples == 0U) {
+      settings.characterization.consecutive_motion_samples == 0U ||
+      !finite(settings.characterization.dynamics_filter_cutoff_hz) ||
+      settings.characterization.dynamics_filter_cutoff_hz < 0.5F ||
+      settings.characterization.dynamics_filter_cutoff_hz > 100.0F ||
+      !finite(settings.characterization.dynamics_quantile) ||
+      settings.characterization.dynamics_quantile < 0.80F ||
+      settings.characterization.dynamics_quantile > 0.99F ||
+      !finite(settings.characterization.recommendation_safety_factor) ||
+      settings.characterization.recommendation_safety_factor < 0.10F ||
+      settings.characterization.recommendation_safety_factor > 1.0F) {
     return false;
   }
+  bool occupied_slots[kRotorSlotCount]{};
+  for (uint8_t index = 0; index < settings.load_setting.count; ++index) {
+    const auto& load = settings.load_setting.loads[index];
+    if (load.load_id >= kRotorSlotCount || occupied_slots[load.load_id] ||
+        load.position_deg != static_cast<uint16_t>(load.load_id * 30U) ||
+        !finite(load.strength) || load.strength < 1.0F || load.strength > 10.0F) {
+      return false;
+    }
+    occupied_slots[load.load_id] = true;
+  }
+  bool selected_profile_found = false;
   for (uint8_t index = 0; index < settings.profile_count; ++index) {
     const auto& profile = settings.profiles[index];
+    selected_profile_found |= profile.profile_id == settings.selected_profile_id;
     if (static_cast<uint8_t>(profile.kind) > static_cast<uint8_t>(ProfileKind::Waypoints) ||
         profile.duration_ms == 0U || profile.point_count > kMaximumProfilePoints ||
         !finite(profile.target_velocity_rad_s) || !finite(profile.sine_mean_rad_s) ||
@@ -457,7 +587,7 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       }
     }
   }
-  return true;
+  return selected_profile_found;
 }
 
 bool SettingsStore::load(MachineSettings& settings) {
@@ -480,17 +610,67 @@ bool SettingsStore::load(MachineSettings& settings) {
     const bool current_schema =
         blob.schema_version == MachineSettings::kSchemaVersion &&
         blob.payload.schema_version == MachineSettings::kSchemaVersion;
-    const bool compatible_v10 = blob.schema_version == 10U &&
-                                blob.payload.schema_version == 10U;
     if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
-        (current_schema || compatible_v10) &&
+        current_schema &&
         blob.payload_size == sizeof(MachineSettings) && blob.crc == crc) {
       settings = blob.payload;
-      if (compatible_v10) {
-        settings.schema_version = MachineSettings::kSchemaVersion;
-        migrated = true;
-      }
       loaded = validate(settings);
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV12)) {
+    LegacyPersistedSettingsV12 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 12U && blob.payload.schema_version == 12U &&
+        blob.payload_size == sizeof(blob.payload) && blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV11)) {
+    LegacyPersistedSettingsV11 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    const bool compatible_schema =
+        (blob.schema_version == 10U || blob.schema_version == 11U) &&
+        blob.payload.schema_version == blob.schema_version;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic && compatible_schema &&
+        blob.payload_size == sizeof(blob.payload) && blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV9)) {
     LegacyPersistedSettingsV9 blob{};
@@ -508,8 +688,9 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;
@@ -534,8 +715,9 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;
@@ -560,8 +742,9 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;
@@ -586,8 +769,9 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;
@@ -612,8 +796,9 @@ bool SettingsStore::load(MachineSettings& settings) {
       settings.safety = blob.payload.safety;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;
@@ -649,8 +834,9 @@ bool SettingsStore::load(MachineSettings& settings) {
           blob.payload.safety.driver_diagnostic_enabled;
       settings.serial = blob.payload.serial;
       copyLegacyEncoder(blob.payload.encoder, settings.encoder);
-      settings.characterization = blob.payload.characterization;
-      settings.load_setting = blob.payload.load_setting;
+      copyLegacyCharacterization(blob.payload.characterization,
+                                 settings.characterization);
+      copyLegacyLoad(blob.payload.load_setting, settings.load_setting);
       settings.profile_count = blob.payload.profile_count;
       settings.selected_profile_id = blob.payload.selected_profile_id;
       settings.profiles = blob.payload.profiles;

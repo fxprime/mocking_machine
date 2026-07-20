@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createTelemetryCsv } from "../web/csv-export.mjs";
+import { createLoadConfigurationCsv, createTelemetryCsv, defaultExportBaseName, sanitizeExportBaseName } from "../web/csv-export.mjs";
 
 const csv = createTelemetryCsv([{
   timestamp: 1742528221,
@@ -29,5 +29,15 @@ assert.match(header, /rotor_position_deg,last_zero_timestamp_us,encoder_count,la
 assert.equal(row,
   "1742528221,0,0.2798,0.0000,-0.024271,0.000444,-0.000096,0.000000,2.2100,12.0733,270.250,0,1505048,0,3,2,0,2,0");
 assert.doesNotMatch(row, /e-/i);
+
+assert.equal(createLoadConfigurationCsv(7, [
+  { slot: 2, position: 60, strength: 4 },
+  { slot: 9, position: 270, strength: 10 }
+]), "load_setting_id,slot_id,position_deg,strength\n7,2,60,4\n7,9,270,10");
+assert.equal(sanitizeExportBaseName(" bearing test.csv "), "bearing test");
+assert.equal(sanitizeExportBaseName("phase:1/run*2"), "phase-1-run-2");
+assert.equal(sanitizeExportBaseName("...", "fallback"), "fallback");
+assert.equal(defaultExportBaseName(new Date("2026-07-21T01:02:03.456Z")),
+  "mocking-machine-run-2026-07-21T01-02-03-456Z");
 
 console.log("CSV export tests passed");

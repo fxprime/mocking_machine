@@ -42,6 +42,18 @@ assert.match(indexSource, /id="finishEncoderCalibration"/);
 assert.match(indexSource, /id="encoderCalibrationResult"/);
 assert.match(indexSource, /id="saveEncoderCalibration"/);
 assert.match(indexSource, /id="resultCharacterizedVmax"/);
+assert.match(indexSource, /id="resultRecommendedAcceleration"/);
+assert.match(indexSource, /id="resultRecommendedJerk"/);
+assert.match(indexSource, /id="applyCharacterizedAcceleration"/);
+assert.match(indexSource, /id="applyCharacterizedJerk"/);
+assert.match(appSource, /accelerationForward:\s*data\.byteLength >= 32 \? data\.getFloat32\(16, true\)/,
+  "GUI must decode appended characterization acceleration results");
+assert.match(appSource, /jerkReverse:\s*data\.byteLength >= 32 \? data\.getFloat32\(28, true\)/,
+  "GUI must decode appended characterization jerk results");
+assert.match(appSource, /applyCharacterizedAcceleration[\s\S]*\? 2 : 0[\s\S]*applyCharacterizedJerk[\s\S]*\? 4 : 0/,
+  "Acceleration and jerk recommendations must be explicit opt-in action flags");
+assert.match(firmwareSource, /static_assert\(sizeof\(CharacterizationResultPayload\) == 32U/,
+  "Firmware characterization result payload boundary must be documented in code");
 assert.match(appSource, /Math\.min\(configuredVmax, detectedLimit\)/,
   "Characterization review must show the clamped vmax before save");
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
@@ -49,6 +61,34 @@ assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
 assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
 assert.match(indexSource, /id="newProfile"/, "Profiles page must expose a create action");
+assert.match(indexSource, /id="runProfileDialog"/);
+assert.match(indexSource, /id="setDefaultProfile"/);
+assert.match(indexSource, /id="rotorLoadDiagram"/);
+assert.match(indexSource, /id="loadSlotDialog"/);
+assert.match(appSource, /SET_DEFAULT_PROFILE:\s*0x0125/);
+assert.match(appSource, /SET_LOAD_CONFIGURATION:\s*0x0132/);
+assert.match(appSource, /runtimeProfileId = action\.profileId/,
+  "Temporary selection must update runtime state without overwriting the saved default");
+assert.match(appSource, /shouldRefreshMachineUi\(renderedMachineStatusKey, state, faults\)/,
+  "Stable telemetry must not rebuild the interactive rotor diagram");
+assert.match(appSource, /runRecorder\.consume\(sample\)/,
+  "Telemetry must pass through the run-session recorder");
+assert.match(appSource, /createTelemetryCsv\(runRecorder\.samples\)/,
+  "CSV export must use only the latest explicitly started run");
+assert.match(appSource, /readBaudPreference\(localPreferenceStorage\(\)\)/,
+  "The connection selector must restore the last valid browser-local baud rate");
+assert.match(appSource, /writeBaudPreference\(localPreferenceStorage\(\), \$\("baud"\)\.value\)/,
+  "Changing baud must persist the selection locally");
+assert.match(indexSource, /id="exportDialog"/);
+assert.match(indexSource, /id="exportBaseName"/);
+assert.match(appSource, /createLoadConfigurationCsv\(recordedLoadSettingId, recordedLoadConfiguration\)/,
+  "A recorded run with loads must export a separate load-information CSV");
+assert.doesNotMatch(indexSource, /id="saveLoadSetup"/,
+  "Load editing must not require a separate save button");
+assert.match(appSource, /applyLoadSlot[\s\S]*persistLoadConfiguration\(\)/,
+  "Applying a slot change must persist immediately");
+assert.match(appSource, /removeLoadSlot[\s\S]*persistLoadConfiguration\(\)/,
+  "Removing a slot must persist immediately");
 assert.match(indexSource, /id="profileCreateReason"/,
   "Profiles page must explain why creation is unavailable");
 assert.match(appSource, /PROFILE_ACTION_TIMEOUT_MS[\s\S]*Profile command timed out; controls unlocked/,

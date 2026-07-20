@@ -80,20 +80,25 @@ DISARMED → ARM command → ARMED → RUN command → RUNNING
 Manual duty expires automatically. Characterization requires the literal `CONFIRM_UNLOADED`, tests both directions, pauses before reversal, measures breakaway duty and maximum velocity, then saves the motor characteristics. Current sense and DIAG are secondary protection; the physical fuse and emergency stop remain primary.
 
 Saving a characterization result also applies a conservative velocity constraint: `vmax` can
-only decrease to the lower measured forward/reverse maximum, never increase. Stored velocity
-profiles and the encoder-timeout threshold are clamped in the same candidate settings copy,
-then the whole structure is validated before a single Preferences write.
+only decrease to the lower measured forward/reverse maximum, never increase. During each
+full-duty direction, an allocation-free online estimator filters the 500 Hz velocity derivative
+and tracks configurable robust quantiles for acceleration and jerk. The browser shows the
+weaker-direction recommendations with a configurable safety factor; applying either limit is
+explicitly opt-in and can only lower the existing value. Stored velocity profiles and the
+encoder-timeout threshold are clamped in the same candidate settings copy, waypoint slopes are
+constrained when acceleration is selected, then the whole structure is validated before a
+single Preferences write.
 
 ## Browser console
 
-The dependency-free console targets a rectangular desktop browser around 1440×900 at desk distance, English/LTR, keyboard and pointer. It uses a compact 1.125 type scale, persistent connection/machine/fault state, visible focus, reduced-motion support, actuator confirmation dialogs, live response chart, settings table, tuning controls, terminal, calibration, and CSV export. Encoder CPR calibration is host-guided: telemetry supplies the 64-bit start/end counts, the browser averages their absolute difference over 1–10 manually entered output-shaft turns, and an explicit review action saves the rounded integer through the normal disarmed `SET_PARAMETER` path. It adds no work to the control loop.
+The dependency-free console targets a rectangular desktop browser around 1440×900 at desk distance, English/LTR, keyboard and pointer. It uses a compact 1.125 type scale, persistent connection/machine/fault state, visible focus, reduced-motion support, actuator confirmation dialogs, live response chart, settings table, tuning controls, terminal, calibration, and CSV export. The Overview includes a keyboard-operable 12-slot rotor diagram whose color, strength badge, and inward arrow label the physical imbalance setup without implying remote actuation. Encoder CPR calibration is host-guided: telemetry supplies the 64-bit start/end counts, the browser averages their absolute difference over 1–10 manually entered output-shaft turns, and an explicit review action saves the rounded integer through the normal disarmed `SET_PARAMETER` path. It adds no work to the control loop.
 
 Connecting automatically starts only the telemetry stream. It never arms or starts the motor.
 
 ## Next product slices
 
 1. Confirm encoder CPR, gearbox ratio, motor stall current, exact WROVER board variant, and DIAG pin count on the supplied module.
-2. Add parameter-descriptor and full profile/load CRUD messages so the browser edits every firmware-owned default and constraint.
+2. Add firmware-owned parameter descriptors and named collections of reusable load configurations.
 3. Add the draggable feasible-profile editor and step-response experiment message (pre-trigger, test duration, automatic stop, summary metrics).
 4. Add current offset sampling at zero current, multi-point gain calibration, and direction-specific sense calibration.
 5. Add datastream backpressure/drop counters and a session metadata record at CSV start.

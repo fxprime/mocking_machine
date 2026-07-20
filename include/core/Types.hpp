@@ -115,6 +115,16 @@ struct CharacterizationConfiguration {
   uint16_t reversal_pause_ms = 1000;
   uint16_t maximum_hold_ms = 2000;
   uint8_t consecutive_motion_samples = 2;
+  float dynamics_filter_cutoff_hz = 20.0F;
+  float dynamics_quantile = 0.95F;
+  float recommendation_safety_factor = 0.70F;
+};
+
+struct CharacterizationDynamicsResult {
+  float acceleration_forward_rad_s2 = 0.0F;
+  float acceleration_reverse_rad_s2 = 0.0F;
+  float jerk_forward_rad_s3 = 0.0F;
+  float jerk_reverse_rad_s3 = 0.0F;
 };
 
 struct LoadEntry {
@@ -123,7 +133,8 @@ struct LoadEntry {
   float strength = 0.0F;
 };
 
-constexpr size_t kMaximumLoads = 8;
+constexpr size_t kRotorSlotCount = 12;
+constexpr size_t kMaximumLoads = kRotorSlotCount;
 struct MachineLoadSetting {
   uint8_t setting_id = 0;
   uint8_t count = 0;
@@ -151,7 +162,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 11;
+  static constexpr uint32_t kSchemaVersion = 13;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

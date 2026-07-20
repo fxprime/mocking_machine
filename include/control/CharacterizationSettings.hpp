@@ -7,6 +7,61 @@
 
 namespace mm::characterization {
 
+inline float recommendedAccelerationRadS2(
+    const CharacterizationDynamicsResult& measured, const float safety_factor) {
+  return safety_factor * std::min(measured.acceleration_forward_rad_s2,
+                                  measured.acceleration_reverse_rad_s2);
+}
+
+inline float recommendedJerkRadS3(
+    const CharacterizationDynamicsResult& measured, const float safety_factor) {
+  return safety_factor * std::min(measured.jerk_forward_rad_s3,
+                                  measured.jerk_reverse_rad_s3);
+}
+
+inline void constrainWaypointAcceleration(VelocityProfileConfiguration& profile,
+                                          const float maximum_acceleration_rad_s2) {
+  if (profile.kind != ProfileKind::Waypoints || profile.point_count < 2U) return;
+  for (uint8_t index = 1U; index < profile.point_count; ++index) {
+    const float dt_s = static_cast<float>(
+        profile.points[index].time_ms - profile.points[index - 1U].time_ms) * 0.001F;
+    profile.points[index].velocity_rad_s = std::min(
+        profile.points[index].velocity_rad_s,
+        profile.points[index - 1U].velocity_rad_s + maximum_acceleration_rad_s2 * dt_s);
+  }
+  for (uint8_t index = profile.point_count - 1U; index > 0U; --index) {
+    const float dt_s = static_cast<float>(
+        profile.points[index].time_ms - profile.points[index - 1U].time_ms) * 0.001F;
+    profile.points[index - 1U].velocity_rad_s = std::min(
+        profile.points[index - 1U].velocity_rad_s,
+        profile.points[index].velocity_rad_s + maximum_acceleration_rad_s2 * dt_s);
+  }
+}
+
+inline bool applyRecommendedDynamics(
+    const CharacterizationDynamicsResult& measured, const float safety_factor,
+    const bool apply_acceleration, const bool apply_jerk, MachineSettings& candidate) {
+  const float acceleration = recommendedAccelerationRadS2(measured, safety_factor);
+  const float jerk = recommendedJerkRadS3(measured, safety_factor);
+  if ((apply_acceleration && (!std::isfinite(acceleration) || acceleration <= 0.0F)) ||
+      (apply_jerk && (!std::isfinite(jerk) || jerk <= 0.0F))) {
+    return false;
+  }
+  if (apply_acceleration) {
+    candidate.safety.max_acceleration_rad_s2 =
+        std::min(candidate.safety.max_acceleration_rad_s2, acceleration);
+    for (uint8_t index = 0U; index < candidate.profile_count; ++index) {
+      constrainWaypointAcceleration(candidate.profiles[index],
+                                    candidate.safety.max_acceleration_rad_s2);
+    }
+  }
+  if (apply_jerk) {
+    candidate.safety.max_jerk_rad_s3 =
+        std::min(candidate.safety.max_jerk_rad_s3, jerk);
+  }
+  return true;
+}
+
 inline bool prepareCharacterizedSettings(const MachineSettings& current,
                                           const MotorCharacteristics& measured,
                                           MachineSettings& candidate) {

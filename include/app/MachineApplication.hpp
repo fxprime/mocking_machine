@@ -6,6 +6,7 @@
 
 #include "control/IncrementalVelocityController.hpp"
 #include "control/CurrentCalibration.hpp"
+#include "control/CharacterizationDynamics.hpp"
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
@@ -48,6 +49,7 @@ class MachineApplication final {
   void sendHeartbeat(uint64_t timestamp_us);
   void sendSettings(uint16_t sequence);
   void sendProfiles(uint16_t sequence);
+  bool sendLoadConfiguration(uint16_t sequence);
   bool sendProfile(const VelocityProfileConfiguration& profile, uint16_t sequence);
   void sendTelemetry();
   bool sendCharacterizationResult(uint16_t sequence);
@@ -82,6 +84,7 @@ class MachineApplication final {
   static constexpr size_t kMaximumArguments = 10;
 
   MachineSettings settings_{};
+  uint16_t runtime_profile_id_ = 0;
   SettingsStore settings_store_{};
   QuadratureEncoder encoder_{};
   ZeroIndexSensor zero_index_{};
@@ -128,6 +131,8 @@ class MachineApplication final {
   float characterization_peak_velocity_ = 0.0F;
   uint8_t characterization_motion_samples_ = 0;
   MotorCharacteristics characterization_candidate_{};
+  characterization::DynamicsEstimator characterization_dynamics_estimator_{};
+  CharacterizationDynamicsResult characterization_dynamics_candidate_{};
   bool characterization_result_pending_ = false;
   bool characterization_notification_pending_ = false;
   bool characterization_status_pending_ = false;

@@ -76,6 +76,9 @@ struct SettingsPayload {
   float zero_index_correction_gain;
   int8_t encoder_direction;
   float zero_index_minimum_separation_revolutions;
+  float characterization_dynamics_filter_cutoff_hz;
+  float characterization_dynamics_quantile;
+  float characterization_recommendation_safety_factor;
 };
 
 struct TelemetryPayload {
@@ -152,6 +155,9 @@ enum class ParameterId : uint16_t {
   ZeroIndexMinimumIntervalUs,
   ZeroIndexCorrectionGain,
   ZeroIndexMinimumSeparationRevolutions,
+  CharacterizationDynamicsFilterCutoffHz,
+  CharacterizationDynamicsQuantile,
+  CharacterizationRecommendationSafetyFactor,
 };
 
 struct ParameterPayload {
@@ -181,6 +187,18 @@ struct ProfilePayload {
 struct SetProfilePayload {
   uint8_t persist;
   ProfilePayload profile;
+};
+
+struct LoadEntryPayload {
+  uint8_t slot_id;
+  uint16_t position_deg;
+  float strength;
+};
+
+struct LoadConfigurationPayload {
+  uint8_t setting_id;
+  uint8_t count;
+  LoadEntryPayload loads[kMaximumLoads];
 };
 
 struct MotorTestPayload {
@@ -222,11 +240,21 @@ struct CharacterizationResultPayload {
   float start_duty_reverse;
   float max_velocity_forward_rad_s;
   float max_velocity_reverse_rad_s;
+  float acceleration_forward_rad_s2;
+  float acceleration_reverse_rad_s2;
+  float jerk_forward_rad_s3;
+  float jerk_reverse_rad_s3;
 };
 
 struct CharacterizationActionPayload {
-  uint8_t save;
+  uint8_t flags;
 };
+
+constexpr uint8_t kCharacterizationSave = 1U << 0U;
+constexpr uint8_t kCharacterizationApplyAcceleration = 1U << 1U;
+constexpr uint8_t kCharacterizationApplyJerk = 1U << 2U;
+constexpr uint8_t kCharacterizationActionMask = kCharacterizationSave |
+    kCharacterizationApplyAcceleration | kCharacterizationApplyJerk;
 
 struct CharacterizationStatusPayload {
   uint8_t stage;
@@ -236,7 +264,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 131U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 143U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -244,13 +272,16 @@ static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
 static_assert(sizeof(TelemetryPayload) == 84U, "Update protocol and browser TELEMETRY decoder");
 static_assert(sizeof(SupplyVoltageCalibrationPayload) == 4U,
               "Supply calibration payload must remain one float");
-static_assert(sizeof(CharacterizationResultPayload) == 16U,
+static_assert(sizeof(CharacterizationResultPayload) == 32U,
               "Characterization result payload layout changed");
 static_assert(sizeof(CharacterizationStatusPayload) == 10U,
               "Characterization status payload layout changed");
 static_assert(sizeof(ParameterPayload) == 7U, "Parameter payload layout changed");
 static_assert(sizeof(ProfilePayload) == 168U, "Profile payload layout changed");
 static_assert(sizeof(SetProfilePayload) == 169U, "Set profile payload layout changed");
+static_assert(sizeof(LoadEntryPayload) == 7U, "Load entry payload layout changed");
+static_assert(sizeof(LoadConfigurationPayload) == 86U,
+              "Load configuration payload layout changed");
 
 VelocityProfileConfiguration decodeProfile(const ProfilePayload& payload) {
   VelocityProfileConfiguration profile{};
@@ -286,6 +317,7 @@ void MachineApplication::configureVelocityController() {
 
 void MachineApplication::begin() {
   const bool loaded = settings_store_.load(settings_);
+  runtime_profile_id_ = settings_.selected_profile_id;
   const uint16_t constrained_stream_rate = protocol::constrainTelemetryStreamRateHz(
       settings_.serial.baud, settings_.serial.stream_rate_hz);
   if (settings_.serial.stream_rate_hz != constrained_stream_rate) {
@@ -646,16 +678,30 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
       if (scheduled_us >= characterization_deadline_us_) {
         characterization_stage_ = CharacterizationStage::ForwardMaximum;
         characterization_peak_velocity_ = 0.0F;
+        characterization_dynamics_estimator_.reset();
         characterization_deadline_us_ = scheduled_us +
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
       return;
     case CharacterizationStage::ForwardMaximum:
       motor_.command(settings_.safety.max_duty);
+      characterization_dynamics_estimator_.update(
+          telemetry_.measured_velocity_rad_s,
+          static_cast<float>(settings_.control.period_us) * 0.000001F);
       characterization_peak_velocity_ = characterization::updatePeakVelocityMagnitude(
           characterization_peak_velocity_, telemetry_.measured_velocity_rad_s);
       if (scheduled_us >= characterization_deadline_us_) {
+        if (!characterization_dynamics_estimator_.valid()) {
+          faults_ |= FaultInvalidConfiguration;
+          transitionToStopped();
+          state_ = RunState::Fault;
+          return;
+        }
         characterization_candidate_.max_velocity_forward_rad_s = characterization_peak_velocity_;
+        characterization_dynamics_candidate_.acceleration_forward_rad_s2 =
+            characterization_dynamics_estimator_.accelerationRadS2();
+        characterization_dynamics_candidate_.jerk_forward_rad_s3 =
+            characterization_dynamics_estimator_.jerkRadS3();
         pause(CharacterizationStage::PauseBeforeReverseMaximum);
       }
       return;
@@ -664,16 +710,30 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
       if (scheduled_us >= characterization_deadline_us_) {
         characterization_stage_ = CharacterizationStage::ReverseMaximum;
         characterization_peak_velocity_ = 0.0F;
+        characterization_dynamics_estimator_.reset();
         characterization_deadline_us_ = scheduled_us +
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
       return;
     case CharacterizationStage::ReverseMaximum:
       motor_.command(-settings_.safety.max_duty);
+      characterization_dynamics_estimator_.update(
+          telemetry_.measured_velocity_rad_s,
+          static_cast<float>(settings_.control.period_us) * 0.000001F);
       characterization_peak_velocity_ = characterization::updatePeakVelocityMagnitude(
           characterization_peak_velocity_, telemetry_.measured_velocity_rad_s);
       if (scheduled_us >= characterization_deadline_us_) {
+        if (!characterization_dynamics_estimator_.valid()) {
+          faults_ |= FaultInvalidConfiguration;
+          transitionToStopped();
+          state_ = RunState::Fault;
+          return;
+        }
         characterization_candidate_.max_velocity_reverse_rad_s = characterization_peak_velocity_;
+        characterization_dynamics_candidate_.acceleration_reverse_rad_s2 =
+            characterization_dynamics_estimator_.accelerationRadS2();
+        characterization_dynamics_candidate_.jerk_reverse_rad_s3 =
+            characterization_dynamics_estimator_.jerkRadS3();
         characterization_result_pending_ = true;
         characterization_notification_pending_ = true;
         transitionToStopped();
@@ -684,7 +744,7 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
 
 const VelocityProfileConfiguration* MachineApplication::selectedProfile() const {
   for (uint8_t index = 0; index < settings_.profile_count; ++index) {
-    if (settings_.profiles[index].profile_id == settings_.selected_profile_id) {
+    if (settings_.profiles[index].profile_id == runtime_profile_id_) {
       return &settings_.profiles[index];
     }
   }
@@ -709,9 +769,13 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::GetProfiles:
       sendProfiles(frame.sequence);
       return;
+    case MessageId::GetLoadConfiguration:
+      sendLoadConfiguration(frame.sequence);
+      return;
     case MessageId::StartStream:
       sendSettings(frame.sequence);
       sendProfiles(frame.sequence);
+      sendLoadConfiguration(frame.sequence);
       if (characterization_result_pending_) {
         sendCharacterizationResult(frame.sequence);
       }
@@ -733,14 +797,101 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       }
       uint16_t requested_id = 0;
       std::memcpy(&requested_id, frame.payload, sizeof(requested_id));
-      const uint16_t previous_id = settings_.selected_profile_id;
-      settings_.selected_profile_id = requested_id;
+      const uint16_t previous_id = runtime_profile_id_;
+      runtime_profile_id_ = requested_id;
       if (selectedProfile() == nullptr) {
-        settings_.selected_profile_id = previous_id;
+        runtime_profile_id_ = previous_id;
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
       } else {
         sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
       }
+      return;
+    }
+    case MessageId::SetDefaultProfile: {
+      if (frame.payload_size != sizeof(uint16_t) || state_ != RunState::Disarmed) {
+        sendAck(frame.sequence, frame.message_id,
+                frame.payload_size != sizeof(uint16_t) ? ResultCode::InvalidLength
+                                                       : ResultCode::UnsafeState);
+        return;
+      }
+      uint16_t requested_id = 0;
+      std::memcpy(&requested_id, frame.payload, sizeof(requested_id));
+      const uint16_t previous_runtime_id = runtime_profile_id_;
+      runtime_profile_id_ = requested_id;
+      if (selectedProfile() == nullptr) {
+        runtime_profile_id_ = previous_runtime_id;
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      const uint16_t previous_default_id = settings_.selected_profile_id;
+      settings_.selected_profile_id = requested_id;
+      MachineSettings persisted = SettingsStore::defaults();
+      settings_store_.load(persisted);
+      bool persisted_profile_exists = false;
+      for (uint8_t index = 0; index < persisted.profile_count; ++index) {
+        persisted_profile_exists |= persisted.profiles[index].profile_id == requested_id;
+      }
+      if (!persisted_profile_exists) {
+        settings_.selected_profile_id = previous_default_id;
+        runtime_profile_id_ = previous_runtime_id;
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      persisted.selected_profile_id = requested_id;
+      if (!SettingsStore::validate(persisted) || !settings_store_.save(persisted)) {
+        settings_.selected_profile_id = previous_default_id;
+        runtime_profile_id_ = previous_runtime_id;
+        sendAck(frame.sequence, frame.message_id, ResultCode::StorageFailure);
+        return;
+      }
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      sendSettings(frame.sequence);
+      return;
+    }
+    case MessageId::SetLoadConfiguration: {
+      if (frame.payload_size != sizeof(LoadConfigurationPayload) ||
+          state_ != RunState::Disarmed) {
+        sendAck(frame.sequence, frame.message_id,
+                frame.payload_size != sizeof(LoadConfigurationPayload)
+                    ? ResultCode::InvalidLength
+                    : ResultCode::UnsafeState);
+        return;
+      }
+      LoadConfigurationPayload requested{};
+      std::memcpy(&requested, frame.payload, sizeof(requested));
+      bool valid = requested.count <= kMaximumLoads;
+      bool occupied[kRotorSlotCount]{};
+      MachineLoadSetting candidate{};
+      candidate.setting_id = requested.setting_id;
+      candidate.count = requested.count;
+      for (uint8_t index = 0; valid && index < requested.count; ++index) {
+        const auto& entry = requested.loads[index];
+        valid = entry.slot_id < kRotorSlotCount &&
+                entry.position_deg == static_cast<uint16_t>(entry.slot_id * 30U) &&
+                !occupied[entry.slot_id] && std::isfinite(entry.strength) &&
+                entry.strength >= 1.0F && entry.strength <= 10.0F;
+        if (valid) {
+          occupied[entry.slot_id] = true;
+          candidate.loads[index] = {entry.slot_id, entry.position_deg, entry.strength};
+        }
+      }
+      if (!valid) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      const MachineLoadSetting previous = settings_.load_setting;
+      settings_.load_setting = candidate;
+      MachineSettings persisted = SettingsStore::defaults();
+      settings_store_.load(persisted);
+      persisted.load_setting = candidate;
+      if (!SettingsStore::validate(persisted) || !settings_store_.save(persisted)) {
+        settings_.load_setting = previous;
+        sendAck(frame.sequence, frame.message_id, ResultCode::StorageFailure);
+        return;
+      }
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      sendSettings(frame.sequence);
+      sendLoadConfiguration(frame.sequence);
       return;
     }
     case MessageId::SetController: {
@@ -932,6 +1083,12 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.encoder.zero_index_correction_gain = update.value; break;
         case ParameterId::ZeroIndexMinimumSeparationRevolutions:
           candidate.encoder.zero_index_minimum_separation_revolutions = update.value; break;
+        case ParameterId::CharacterizationDynamicsFilterCutoffHz:
+          candidate.characterization.dynamics_filter_cutoff_hz = update.value; break;
+        case ParameterId::CharacterizationDynamicsQuantile:
+          candidate.characterization.dynamics_quantile = update.value; break;
+        case ParameterId::CharacterizationRecommendationSafetyFactor:
+          candidate.characterization.recommendation_safety_factor = update.value; break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -1240,13 +1397,15 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       }
       CharacterizationActionPayload action{};
       std::memcpy(&action, frame.payload, sizeof(action));
-      if (action.save > 1U || !characterization_result_pending_ ||
+      const bool invalid_flags = (action.flags & ~kCharacterizationActionMask) != 0U ||
+          (action.flags != 0U && (action.flags & kCharacterizationSave) == 0U);
+      if (invalid_flags || !characterization_result_pending_ ||
           state_ != RunState::Disarmed) {
         sendAck(frame.sequence, frame.message_id,
-                action.save > 1U ? ResultCode::InvalidValue : ResultCode::UnsafeState);
+                invalid_flags ? ResultCode::InvalidValue : ResultCode::UnsafeState);
         return;
       }
-      if (action.save == 0U) {
+      if (action.flags == 0U) {
         characterization_result_pending_ = false;
         characterization_notification_pending_ = false;
         sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
@@ -1255,6 +1414,11 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       MachineSettings candidate{};
       if (!characterization::prepareCharacterizedSettings(
               settings_, characterization_candidate_, candidate) ||
+          !characterization::applyRecommendedDynamics(
+              characterization_dynamics_candidate_,
+              settings_.characterization.recommendation_safety_factor,
+              (action.flags & kCharacterizationApplyAcceleration) != 0U,
+              (action.flags & kCharacterizationApplyJerk) != 0U, candidate) ||
           !SettingsStore::validate(candidate)) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
@@ -1327,6 +1491,9 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.encoder.zero_index_correction_gain,
       settings_.encoder.direction,
       settings_.encoder.zero_index_minimum_separation_revolutions,
+      settings_.characterization.dynamics_filter_cutoff_hz,
+      settings_.characterization.dynamics_quantile,
+      settings_.characterization.recommendation_safety_factor,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }
@@ -1373,6 +1540,18 @@ void MachineApplication::sendProfiles(const uint16_t sequence) {
   }
 }
 
+bool MachineApplication::sendLoadConfiguration(const uint16_t sequence) {
+  LoadConfigurationPayload payload{};
+  payload.setting_id = settings_.load_setting.setting_id;
+  payload.count = settings_.load_setting.count;
+  for (uint8_t index = 0; index < settings_.load_setting.count; ++index) {
+    const auto& source = settings_.load_setting.loads[index];
+    payload.loads[index] = {source.load_id, source.position_deg, source.strength};
+  }
+  return serial_link_.send(protocol::MessageId::LoadConfiguration, sequence, &payload,
+                           sizeof(payload));
+}
+
 void MachineApplication::sendTelemetry() {
   const TelemetryPayload payload{
       telemetry_.timestamp_us, telemetry_.last_zero_timestamp_us, telemetry_.encoder_count,
@@ -1399,6 +1578,10 @@ bool MachineApplication::sendCharacterizationResult(const uint16_t sequence) {
       characterization_candidate_.start_duty_reverse,
       characterization_candidate_.max_velocity_forward_rad_s,
       characterization_candidate_.max_velocity_reverse_rad_s,
+      characterization_dynamics_candidate_.acceleration_forward_rad_s2,
+      characterization_dynamics_candidate_.acceleration_reverse_rad_s2,
+      characterization_dynamics_candidate_.jerk_forward_rad_s3,
+      characterization_dynamics_candidate_.jerk_reverse_rad_s3,
   };
   return serial_link_.send(protocol::MessageId::CharacterizationResult, sequence, &payload,
                            sizeof(payload));

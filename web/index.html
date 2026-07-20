@@ -52,17 +52,31 @@
           </div>
         </article>
       </div>
+      <article class="panel rotor-load-panel">
+        <div class="panel-heading">
+          <div><h2>Rotor load setup</h2><p>Click a 30° slot to label the installed imbalance strength. The drawing records the physical setup; it does not move the load.</p></div>
+          <span id="loadSetupStatus" class="status-badge offline">0 active slots</span>
+        </div>
+        <div class="rotor-load-layout">
+          <svg id="rotorLoadDiagram" class="rotor-load-diagram" viewBox="0 0 420 420" role="group" aria-label="Twelve rotor load positions"></svg>
+          <div class="rotor-load-summary">
+            <h3>Installed loads</h3>
+            <div id="loadSlotList" class="load-slot-list"><p class="hint">No load positions configured.</p></div>
+            <p class="hint">Changes are saved automatically while connected and disarmed. Strength is a label from 1–10 for the attached weight or load severity.</p>
+          </div>
+        </div>
+      </article>
       <article class="panel chart-panel">
         <div class="panel-heading">
           <div><h2>Velocity response</h2><p>Desired and measured angular velocity</p></div>
-          <button id="exportButton" disabled>Export CSV</button>
+          <button id="exportButton" disabled>Export last run CSV</button>
         </div>
         <canvas id="responseChart" width="1200" height="380" aria-label="Velocity response chart"></canvas>
         <div class="legend"><span class="desired-line">— Desired</span><span class="measured-line">— Measured</span></div>
       </article>
       <div class="action-row">
         <button id="armButton" disabled>Arm output</button>
-        <button id="runButton" class="primary" disabled>Run selected profile</button>
+        <button id="runButton" class="primary" disabled>Run</button>
         <span class="hint">Starting the data stream never starts the motor.</span>
       </div>
     </section>
@@ -326,6 +340,42 @@
   <dialog id="safetyDialog">
     <form method="dialog"><h2>Confirm physical actuation</h2><p id="safetyMessage"></p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="confirm" class="danger">I have made the rig safe</button></div></form>
   </dialog>
+  <dialog id="exportDialog" class="review-dialog">
+    <form method="dialog" id="exportForm">
+      <h2>Export recorded run</h2>
+      <p>Use the generated name or enter a descriptive name for this dataset.</p>
+      <label>File name
+        <input id="exportBaseName" type="text" maxlength="100" required autocomplete="off">
+      </label>
+      <p id="exportFileSummary" class="notice"></p>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button value="export" class="primary">Export CSV</button></div>
+    </form>
+  </dialog>
+  <dialog id="runProfileDialog" class="review-dialog">
+    <form method="dialog" id="runProfileForm">
+      <h2>Run velocity profile</h2>
+      <p>Selecting a profile here changes only the next run. The saved default changes only when you choose <strong>Set as default</strong>.</p>
+      <button id="runDialogArm" type="button" class="warning">Arm output</button>
+      <p id="runDialogArmHint" class="hint">The machine must be armed before Run is enabled.</p>
+      <div class="run-profile-selection">
+        <label>Profile <select id="runProfileSelect"></select></label>
+        <button id="setDefaultProfile" type="button">Set as default</button>
+      </div>
+      <p id="runProfileStatus" class="notice" role="status"></p>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button id="confirmRunProfile" type="button" class="danger" disabled>Run</button></div>
+    </form>
+  </dialog>
+  <dialog id="loadSlotDialog" class="review-dialog">
+    <form method="dialog" id="loadSlotForm">
+      <h2>Configure rotor slot</h2>
+      <p>Position <strong><span id="loadSlotPosition">0</span>°</strong></p>
+      <label>Strength level (1–10)
+        <input id="loadSlotStrength" type="range" min="1" max="10" step="1" value="1">
+      </label>
+      <output id="loadSlotStrengthValue" for="loadSlotStrength">1</output>
+      <div class="dialog-actions"><button id="removeLoadSlot" type="button">Remove load</button><button value="cancel">Cancel</button><button id="applyLoadSlot" type="button" class="primary">Apply</button></div>
+    </form>
+  </dialog>
   <dialog id="vinCalibrationDialog">
     <form method="dialog" id="vinCalibrationForm">
       <h2>Calibrate driver VIN</h2>
@@ -348,8 +398,19 @@
         <div><dt>Maximum forward velocity</dt><dd><span id="resultMaxVelocityForward">—</span> rad/s <small id="resultMaxRpmForward"></small></dd></div>
         <div><dt>Maximum reverse velocity</dt><dd><span id="resultMaxVelocityReverse">—</span> rad/s <small id="resultMaxRpmReverse"></small></dd></div>
         <div><dt>Machine vmax after save</dt><dd><span id="resultCharacterizedVmax">—</span> rad/s <small id="resultCharacterizedVmaxDetail"></small></dd></div>
+        <div><dt>Forward acceleration (robust peak)</dt><dd><span id="resultAccelerationForward">—</span> rad/s²</dd></div>
+        <div><dt>Reverse acceleration (robust peak)</dt><dd><span id="resultAccelerationReverse">—</span> rad/s²</dd></div>
+        <div><dt>Forward jerk (robust peak)</dt><dd><span id="resultJerkForward">—</span> rad/s³</dd></div>
+        <div><dt>Reverse jerk (robust peak)</dt><dd><span id="resultJerkReverse">—</span> rad/s³</dd></div>
+        <div><dt>Recommended acceleration</dt><dd><span id="resultRecommendedAcceleration">—</span> rad/s² <small id="resultAccelerationRecommendationDetail"></small></dd></div>
+        <div><dt>Recommended jerk</dt><dd><span id="resultRecommendedJerk">—</span> rad/s³ <small id="resultJerkRecommendationDetail"></small></dd></div>
       </dl>
-      <p class="hint">Save uses the lower measured direction as the safe motor limit. It only lowers vmax; dependent profile velocities and the encoder-timeout threshold are clamped with it. Discard keeps the previous characteristics.</p>
+      <fieldset>
+        <legend>Optional motion-limit updates</legend>
+        <label class="checkbox-option"><input id="applyCharacterizedAcceleration" type="checkbox"> Apply recommended maximum acceleration</label>
+        <label class="checkbox-option"><input id="applyCharacterizedJerk" type="checkbox"> Apply recommended maximum jerk</label>
+      </fieldset>
+      <p class="hint">Save always applies motor characteristics and the conservative velocity clamp. Acceleration and jerk remain unchanged unless selected above; recommendations can only lower existing limits. Waypoint profiles are constrained if acceleration is lowered.</p>
       <div class="dialog-actions"><button id="discardCharacterization" value="discard">Discard result</button><button id="saveCharacterization" value="save" class="primary">Apply and save</button></div>
     </form>
   </dialog>

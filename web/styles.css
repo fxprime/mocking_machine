@@ -60,6 +60,23 @@ main { max-width: 1480px; margin: auto; padding: 0 2rem 3rem; }
 .rotor-dial.unreferenced { opacity: .45; }
 .rotor-needle { position: absolute; left: calc(50% - 1px); bottom: 50%; width: 2px; height: 21px; border-radius: 2px; background: var(--measured); transform: rotate(0deg); transform-origin: 50% 100%; transition: transform .1s linear; }
 .rotor-zero-mark { position: absolute; top: -3px; left: 50%; color: var(--on-muted); font-size: .65rem; line-height: 1; transform: translate(-50%, -100%); }
+.rotor-load-panel { width: min(100%, 720px); }
+.rotor-load-layout { display: grid; grid-template-columns: 280px minmax(220px, 1fr); gap: 1rem; align-items: center; margin-top: .75rem; }
+.rotor-load-diagram { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; margin: auto; }
+.rotor-slot { cursor: pointer; outline: none; }
+.rotor-slot .slot-hit { fill: transparent; stroke: none; }
+.rotor-slot .slot-hole { fill: #080d11; stroke: #6e7c85; stroke-width: 2; transition: stroke-width .15s, filter .15s; }
+.rotor-slot:hover .slot-hole, .rotor-slot:focus-visible .slot-hole { stroke: var(--interactive); stroke-width: 5; filter: drop-shadow(0 0 5px rgba(78,195,224,.55)); }
+.rotor-slot .slot-badge { fill: var(--surface-raised); stroke: currentColor; stroke-width: 2; }
+.rotor-slot text { fill: currentColor; font: 700 14px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.rotor-slot .strength-arrow { stroke: currentColor; stroke-width: 5; stroke-linecap: round; marker-end: url(#loadArrow); }
+.rotor-load-summary h3 { margin: 0 0 .75rem; font-size: 1rem; }
+.load-slot-list { min-height: 7rem; display: flex; flex-wrap: wrap; align-content: flex-start; gap: .5rem; margin-bottom: 1rem; }
+.load-slot-chip { display: inline-flex; align-items: center; gap: .45rem; padding: .4rem .65rem; border: 1px solid currentColor; border-radius: 999px; background: var(--surface-soft); }
+.load-slot-chip i { width: .65rem; height: .65rem; border-radius: 50%; background: currentColor; }
+.run-profile-selection { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: .75rem; align-items: end; margin-top: 1rem; }
+#loadSlotStrength { width: 100%; accent-color: var(--interactive); }
+#loadSlotStrengthValue { display: block; width: 3rem; margin: .75rem auto 0; text-align: center; font-size: 1.5rem; color: var(--interactive); }
 .panel { margin-top: 1rem; padding: 1.25rem; }
 .panel p { color: var(--on-muted); max-width: 72ch; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
@@ -111,7 +128,7 @@ th { color: var(--on-muted); font-size: .8rem; text-transform: uppercase; letter
 #toast { position: fixed; right: 1.5rem; bottom: 1.5rem; max-width: 420px; padding: .8rem 1rem; background: var(--surface-soft); border: 1px solid var(--outline); border-radius: 6px; opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .15s, transform .15s; }
 #toast.visible { opacity: 1; transform: none; }
 dialog { max-width: 520px; background: var(--surface-raised); color: var(--on-surface); border: 1px solid var(--danger); border-radius: 8px; padding: 1.5rem; }
-dialog.review-dialog { max-width: 680px; border-color: var(--interactive); }
+dialog.review-dialog { max-width: 680px; max-height: calc(100vh - 2rem); overflow: auto; border-color: var(--interactive); }
 dialog.profile-dialog { width: min(1120px, calc(100vw - 2rem)); max-width: none; border-color: var(--interactive); }
 dialog::backdrop { background: rgba(0,0,0,.72); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .75rem; margin-top: 1.5rem; }
@@ -147,4 +164,5 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (max-width: 900px) { .topbar { align-items: flex-start; flex-direction: column; } .metric-grid { grid-template-columns: repeat(2, 1fr); } .two-column { grid-template-columns: 1fr; } .constraint-strip { grid-template-columns: repeat(2, 1fr); } .point-editor { grid-template-columns: 1fr 1fr; } .estimator-controls { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { main, .topbar { padding-left: 1rem; padding-right: 1rem; } .metric-grid, .form-grid, .pwm-control, .result-grid, .profile-form-grid, .constraint-strip, .point-editor, .calibration-point-grid { grid-template-columns: 1fr; } .connection-controls { align-items: stretch; } .action-row, .fault-banner.with-action, .profile-actions, .calibration-actions { align-items: stretch; flex-direction: column; } .profile-actions .danger, .calibration-actions .primary { margin-left: 0; } }
+@media (max-width: 620px) { .rotor-load-layout { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { main, .topbar { padding-left: 1rem; padding-right: 1rem; } .metric-grid, .form-grid, .pwm-control, .result-grid, .profile-form-grid, .constraint-strip, .point-editor, .calibration-point-grid, .run-profile-selection { grid-template-columns: 1fr; } .connection-controls { align-items: stretch; } .action-row, .fault-banner.with-action, .profile-actions, .calibration-actions { align-items: stretch; flex-direction: column; } .profile-actions .danger, .calibration-actions .primary { margin-left: 0; } }
