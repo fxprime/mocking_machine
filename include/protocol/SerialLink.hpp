@@ -27,6 +27,7 @@ enum class MessageId : uint16_t {
   GetProfiles = 0x0121,
   ProfileConfiguration = 0x0122,
   SetProfile = 0x0123,
+  CreateProfile = 0x0124,
   StartRun = 0x0200,
   StopRun = 0x0201,
   MotorTest = 0x0202,

@@ -9,7 +9,7 @@ import { nextAvailableProfileId } from "./profile-collection.mjs";
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const MAX_PROFILES = 8;
 
@@ -55,6 +55,7 @@ let encoderCalibrationCandidate;
 let encoderCalibrationSavePending = false;
 let motorTestActive = false;
 let motorTestTimer;
+let motorTestAction;
 let characterizationAction;
 let characterizationRunning = false;
 let characterizationSamples = [];
@@ -249,7 +250,39 @@ function handleMessage(id, data) {
       }
       return;
     }
+    if (request === MSG.ARM && motorTestAction?.stage === "arm") {
+      if (result === 0) {
+        motorTestAction.stage = "start";
+        $("motorTestState").textContent = "● Armed; applying raw output…";
+        sendMotorTestDuty(motorTestAction.duty).catch(error => {
+          motorTestAction = undefined;
+          setMotorTestActive(false);
+          toast(`Could not send raw motor command: ${error.message}`);
+        });
+      } else {
+        motorTestAction = undefined;
+        setMotorTestActive(false);
+        toast(`Could not arm motor test: ${resultDescription(result)}.`);
+      }
+      return;
+    }
     if (request === MSG.MOTOR_TEST) {
+      if (motorTestAction?.stage === "start") {
+        if (result === 0) {
+          motorTestAction = undefined;
+          setMotorTestActive(true);
+          motorTestTimer = setInterval(() => {
+            if (motorTestActive) sendMotorTestDuty(signedMotorTestDuty())
+                .catch(() => stopMotorTest(false));
+          }, 250);
+          toast("Raw motor output started.");
+        } else {
+          motorTestAction = undefined;
+          setMotorTestActive(false);
+          toast(`Raw motor command rejected: ${resultDescription(result)}.`);
+        }
+        return;
+      }
       if (result !== 0) {
         setMotorTestActive(false);
         setCurrentCalibrationDriveActive(false);
@@ -295,7 +328,8 @@ function handleMessage(id, data) {
         latestState = 0;
         profileAction.stage = "upload";
         if (profileAction.type === "run") $("profileRunCommandStatus").textContent = "Motor disarmed. Validating profile with firmware…";
-        sendFrame(MSG.SET_PROFILE, encodeProfile(profileAction.type === "save"));
+        sendFrame(profileAction.createOnly ? MSG.CREATE_PROFILE : MSG.SET_PROFILE,
+                  encodeProfile(profileAction.type === "save"));
       } else {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
@@ -401,14 +435,17 @@ function handleMessage(id, data) {
       }
       return;
     }
-    if (request === MSG.SET_PROFILE) {
+    if (request === MSG.SET_PROFILE || request === MSG.CREATE_PROFILE) {
       const action = profileAction;
       if (result !== 0) {
         profileAction = undefined;
         $("saveProfile").disabled = false; $("runProfileTest").disabled = false;
         renderProfiles();
-        $("profileRunCommandStatus").textContent = `Profile rejected: ${resultDescription(result)}.`;
-        toast(`Profile rejected: ${resultDescription(result)}.`);
+        const reason = request === MSG.CREATE_PROFILE && result === 1
+          ? "This firmware does not support creating profiles; upload the current firmware build"
+          : resultDescription(result);
+        $("profileRunCommandStatus").textContent = `Profile rejected: ${reason}.`;
+        toast(`Profile rejected: ${reason}.`);
         return;
       }
       if (action?.type === "run") {
@@ -528,7 +565,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; profileAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; profileAction = undefined; motorTestAction = undefined; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderEncoderCalibration();
 }
 
@@ -1139,13 +1176,12 @@ function addProfilePoint(time, velocity) {
 }
 
 function encodeProfile(persist) {
-  const payload = new Uint8Array(170), view = new DataView(payload.buffer);
+  const payload = new Uint8Array(169), view = new DataView(payload.buffer);
   payload[0] = persist ? 1 : 0; view.setUint16(1, editingProfile.id, true); payload[3] = 2;
   payload.set(encoder.encode(editingProfile.name).slice(0, 15), 4);
   view.setFloat32(20, 0, true); view.setFloat32(24, 0, true); view.setFloat32(28, 0, true); view.setFloat32(32, 1, true);
   view.setUint32(36, Math.round(editingProfile.duration * 1000), true); payload[40] = editingProfile.points.length;
   editingProfile.points.forEach((point, index) => { view.setUint32(41 + index * 8, Math.round(point.time * 1000), true); view.setFloat32(45 + index * 8, point.velocity, true); });
-  payload[169] = editingProfile.createOnly ? 1 : 0;
   return payload;
 }
 
@@ -1156,7 +1192,8 @@ async function submitProfile(type) {
   const preparation = profilePreparation(latestState, characterizationRunning);
   if (preparation.blocked) return toast(preparation.blocked);
   if (type === "run" && !await confirmSafety("This test will rotate the motor using the edited velocity path. Verify the imbalance setting, close the guard, and keep the emergency stop accessible.")) return;
-  profileAction = { type, profileId: editingProfile.id, stage: preparation.firstCommand };
+  profileAction = { type, profileId: editingProfile.id, createOnly: editingProfile.createOnly,
+                    stage: preparation.firstCommand };
   $("saveProfile").disabled = true; $("runProfileTest").disabled = true;
   $("newProfile").disabled = true;
   if (type === "run") {
@@ -1171,7 +1208,8 @@ async function submitProfile(type) {
     toast("Stopping and disarming before applying the profile…");
     await sendFrame(MSG.STOP_RUN);
   } else {
-    await sendFrame(MSG.SET_PROFILE, encodeProfile(type === "save"));
+    await sendFrame(profileAction.createOnly ? MSG.CREATE_PROFILE : MSG.SET_PROFILE,
+                    encodeProfile(type === "save"));
   }
 }
 
@@ -1217,7 +1255,7 @@ function setMotorTestActive(active) {
   motorTestTimer = undefined;
   $("motorTestState").textContent = active ? "● Raw output active" : "● Stopped";
   $("motorTestState").className = `status-badge ${active ? "online" : "offline"}`;
-  $("startMotorTest").disabled = !connected || active;
+  $("startMotorTest").disabled = !connected || active || Boolean(motorTestAction);
 }
 
 async function startMotorTest() {
@@ -1225,14 +1263,21 @@ async function startMotorTest() {
   if (latestState !== 0 && latestState !== 1) return toast("Stop the active run or clear the fault before motor testing.");
   if (!(Math.abs(duty) >= 0.01 && Math.abs(duty) <= Number(settings.maxDuty))) return toast("PWM duty is outside the firmware limit.");
   if (!await confirmSafety("Direct raw PWM will rotate the motor without velocity control. Remove imbalance weights, close the guard, verify direction, and keep the emergency stop accessible.")) return;
-  await sendAscii("arm");
-  setMotorTestActive(true);
-  await sendMotorTestDuty(duty);
-  motorTestTimer = setInterval(() => { if (motorTestActive) sendMotorTestDuty(signedMotorTestDuty()).catch(() => stopMotorTest(false)); }, 250);
+  motorTestAction = { stage: "arm", duty };
+  setMotorTestActive(false);
+  $("motorTestState").textContent = "● Requesting arm…";
+  try {
+    await sendFrame(MSG.ARM);
+  } catch (error) {
+    motorTestAction = undefined;
+    setMotorTestActive(false);
+    toast(`Could not request motor-test arm: ${error.message}`);
+  }
 }
 
 async function stopMotorTest(disarm = true) {
   const wasActive = motorTestActive;
+  motorTestAction = undefined;
   setMotorTestActive(false);
   if (!writer) return;
   if (wasActive) await sendMotorTestDuty(0);

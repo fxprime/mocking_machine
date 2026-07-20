@@ -36,7 +36,8 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, n
 | `0x0120` | SELECT_PROFILE | host→device | 2 |
 | `0x0121` | GET_PROFILES | host→device | 0 |
 | `0x0122` | PROFILE_CONFIGURATION | device→host | 168 |
-| `0x0123` | SET_PROFILE | host→device | 170 |
+| `0x0123` | SET_PROFILE | host→device | 169 |
+| `0x0124` | CREATE_PROFILE | host→device | 169 |
 | `0x0200` | START_RUN | host→device | 0 |
 | `0x0201` | STOP_RUN | host→device | 0 |
 | `0x0202` | MOTOR_TEST | host→device | 4 |
@@ -97,7 +98,7 @@ to 0 only when intentionally disabling the encoder-distance bounce filter.
 
 `GET_PROFILES` emits one `PROFILE_CONFIGURATION` per stored profile. Streaming also sends the complete profile list after SETTINGS. The packed profile payload is `u16 id, u8 kind, char name[16], f32 target, f32 sine_mean, f32 sine_amplitude, f32 sine_frequency_hz, u32 duration_ms, u8 point_count`, followed by 16 fixed slots of `u32 time_ms, f32 velocity_rad_s`.
 
-`SET_PROFILE` carries `u8 persist`, the same 168-byte profile payload, and `u8 create_only`. It is accepted only while disarmed. With `create_only=0`, the profile ID must already exist and that profile is replaced. With `create_only=1`, the profile ID must be unused and the profile is appended if fewer than eight profiles exist; an ID collision or a full collection is rejected without modifying any profile. Firmware also rejects invalid kinds, durations, point counts, out-of-order points, velocities outside the configured limit, and waypoint slopes above the configured acceleration limit. `persist=0` supports a temporary test; `persist=1` saves the resulting collection to Preferences.
+`SET_PROFILE` and `CREATE_PROFILE` both prepend `u8 persist` to the same 168-byte profile payload and are accepted only while disarmed. `SET_PROFILE` preserves its original 169-byte wire format and requires an existing ID. `CREATE_PROFILE` requires an unused ID and appends the profile if fewer than eight profiles exist; an ID collision or a full collection is rejected without modifying any profile. Firmware also rejects invalid kinds, durations, point counts, out-of-order points, velocities outside the configured limit, and waypoint slopes above the configured acceleration limit. `persist=0` supports a temporary test; `persist=1` saves the resulting collection to Preferences.
 
 `MOTOR_TEST` carries one `f32 signed_raw_duty`. It is accepted only while armed and fault-free, is bounded by configured `max_duty`, bypasses velocity control and deadband compensation, and expires after `command_timeout_ms` unless refreshed. Zero duty stops output immediately. `STOP_RUN` stops and disarms.
 

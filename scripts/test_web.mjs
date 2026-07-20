@@ -47,12 +47,20 @@ assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
 assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
 assert.match(indexSource, /id="newProfile"/, "Profiles page must expose a create action");
-assert.match(appSource, /new Uint8Array\(170\)[\s\S]*payload\[169\] = editingProfile\.createOnly \? 1 : 0/,
-  "New profiles must carry explicit create intent");
-assert.match(firmwareSource, /static_assert\(sizeof\(SetProfilePayload\) == 170U/,
-  "Firmware must enforce the extended profile payload boundary");
-assert.match(firmwareSource, /applyProfileUpdate\([\s\S]*update\.create_only != 0U/,
-  "Firmware must apply explicit create-only semantics");
+assert.match(appSource, /CREATE_PROFILE:\s*0x0124/,
+  "Profile creation must use a separate message ID instead of changing SET_PROFILE length");
+assert.match(appSource, /new Uint8Array\(169\)/,
+  "The established SET_PROFILE payload boundary must remain compatible");
+assert.match(firmwareSource, /static_assert\(sizeof\(SetProfilePayload\) == 169U/,
+  "Firmware must preserve the established profile-update payload boundary");
+const motorStartSource = appSource.slice(appSource.indexOf("async function startMotorTest"), appSource.indexOf("async function stopMotorTest"));
+assert.doesNotMatch(motorStartSource, /sendAscii\("arm"\)/,
+  "Motor test must not mix an unacknowledged ASCII arm with a binary PWM command");
+assert.match(motorStartSource, /sendFrame\(MSG\.ARM\)/,
+  "Motor test must begin with an acknowledged binary ARM command");
+const runOnceSource = firmwareSource.slice(firmwareSource.indexOf("void MachineApplication::runOnce()"), firmwareSource.indexOf("void MachineApplication::controlTick"));
+assert.ok(runOnceSource.indexOf("if (now >= next_control_us_)") < runOnceSource.indexOf("serial_link_.poll()"),
+  "The 500 Hz control deadline must be serviced before serial commands can activate output");
 assert.match(appSource, /rotorPosition:\s*data\.byteLength >= 76 \? data\.getFloat32\(72, true\)/,
   "GUI must decode the appended rotor position telemetry field");
 assert.match(appSource, /rotorNeedle[\s\S]*rotate\(/,

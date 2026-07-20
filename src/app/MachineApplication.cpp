@@ -180,7 +180,6 @@ struct ProfilePayload {
 struct SetProfilePayload {
   uint8_t persist;
   ProfilePayload profile;
-  uint8_t create_only;
 };
 
 struct MotorTestPayload {
@@ -250,7 +249,7 @@ static_assert(sizeof(CharacterizationStatusPayload) == 10U,
               "Characterization status payload layout changed");
 static_assert(sizeof(ParameterPayload) == 7U, "Parameter payload layout changed");
 static_assert(sizeof(ProfilePayload) == 168U, "Profile payload layout changed");
-static_assert(sizeof(SetProfilePayload) == 170U, "Set profile payload layout changed");
+static_assert(sizeof(SetProfilePayload) == 169U, "Set profile payload layout changed");
 
 VelocityProfileConfiguration decodeProfile(const ProfilePayload& payload) {
   VelocityProfileConfiguration profile{};
@@ -322,9 +321,7 @@ void MachineApplication::begin() {
 }
 
 void MachineApplication::runOnce() {
-  serial_link_.poll();
-  serial_link_.serviceTx();
-  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
 
   if (now >= next_control_us_) {
     const uint64_t lateness_us = now - next_control_us_;
@@ -348,6 +345,13 @@ void MachineApplication::runOnce() {
       } while (next_control_us_ <= now);
     }
   }
+
+  // The control deadline is evaluated before commands can change actuator state.
+  // This prevents lateness accumulated while safely stopped from being attributed
+  // retroactively to a motor command received during this iteration.
+  serial_link_.poll();
+  serial_link_.serviceTx();
+  now = static_cast<uint64_t>(esp_timer_get_time());
 
   if (now >= next_heartbeat_us_) {
     sendHeartbeat(now);
@@ -958,7 +962,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       sendSettings(frame.sequence);
       return;
     }
-    case MessageId::SetProfile: {
+    case MessageId::SetProfile:
+    case MessageId::CreateProfile: {
       if (frame.payload_size != sizeof(SetProfilePayload) || state_ != RunState::Disarmed ||
           characterization_stage_ != CharacterizationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
@@ -968,16 +973,16 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       }
       SetProfilePayload update{};
       std::memcpy(&update, frame.payload, sizeof(update));
-      if (update.persist > 1U || update.create_only > 1U ||
+      if (update.persist > 1U ||
           update.profile.kind > static_cast<uint8_t>(ProfileKind::Waypoints) ||
           update.profile.point_count > kMaximumProfilePoints || update.profile.duration_ms == 0U) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
       }
       MachineSettings candidate = settings_;
+      const bool create_only = frame.message_id == MessageId::CreateProfile;
       const ProfileUpdateResult profile_result = applyProfileUpdate(
-          candidate.profiles, candidate.profile_count, decodeProfile(update.profile),
-          update.create_only != 0U);
+          candidate.profiles, candidate.profile_count, decodeProfile(update.profile), create_only);
       if ((profile_result != ProfileUpdateResult::Created &&
            profile_result != ProfileUpdateResult::Replaced) ||
           !SettingsStore::validate(candidate)) {

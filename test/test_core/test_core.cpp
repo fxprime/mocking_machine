@@ -23,6 +23,18 @@ void test_crc_standard_vector() {
   TEST_ASSERT_EQUAL_HEX16(0x29B1, protocol::crc16CcittFalse(data.data(), data.size()));
 }
 
+void test_create_profile_frame_crc_vector() {
+  std::array<uint8_t, 8U + 169U> protected_bytes{};
+  protected_bytes[0] = 1U;     // Protocol version.
+  protected_bytes[2] = 0x24U;  // CREATE_PROFILE 0x0124, little endian.
+  protected_bytes[3] = 0x01U;
+  protected_bytes[4] = 0x34U;  // Sequence 0x1234, little endian.
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 169U;   // Bounded payload size, little endian.
+  TEST_ASSERT_EQUAL_HEX16(
+      0xA828U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
 void test_incremental_controller_scales_integral_by_time() {
   ControlConfiguration configuration{};
   configuration.kp = 0.0F;
@@ -356,6 +368,7 @@ void test_characterization_never_raises_existing_vmax() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
+  RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);
   RUN_TEST(test_incremental_controller_reports_each_delta_term);
