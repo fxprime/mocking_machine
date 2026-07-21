@@ -6,17 +6,9 @@ Mocking Machine is a controlled excitation rig, not merely a motor speed control
 
 The physical machine is intentionally hazardous: a 12 V geared brushed-DC motor can rotate an adjustable imbalance at high speed. A guard, base, fuse, emergency stop, and independent power disconnect are product requirements, not optional accessories.
 
-## Design learned from the reference projects
+## Design 
 
-The lightsaber project has a useful interaction pattern: one command registry supplies dispatch and help, while Arduino `setup()` constructs services and `loop()` services them. Its implementation is unsuitable for this controller because `readStringUntil()`, `String`, `std::vector`, runtime linked-list deletion, and serial printing can block or allocate unpredictably. `CommandSystem::currentId` is also not initialized, and the run loop resets deadlines to “now,” which accumulates timing drift.
-
-The mecanum project uses the desired incremental PI form:
-
-```text
-u[k] = u[k-1] + Kp(e[k] - e[k-1]) + Ki e[k]
-```
-
-That code calculates `deltaT` but does not use it, does not update `lastTime`, and clamps only the returned PWM while leaving the internal accumulator wound up. This project implements the time-correct form:
+This project implements the time-correct form:
 
 ```text
 Δu = Kp Δe + Ki Ts e + Kd Δ²e / Ts
@@ -29,18 +21,18 @@ Integral contribution that would push a saturated output farther into saturation
 
 `MachineApplication` is a Meyers singleton only because Arduino requires global `setup()` and `loop()` entry points. It owns concrete modules, establishes initialization order, and advances the state machine. Modules do not reach back through the singleton and remain independently testable.
 
-```text
-Arduino loop
-  └─ MachineApplication::runOnce
-      ├─ bounded serial RX/TX service
-      ├─ fixed-deadline 500 Hz control tick
-      │   ├─ encoder snapshot + adaptive velocity estimate
-      │   ├─ current/diagnostic/encoder safety checks
-      │   ├─ profile → jerk/acceleration/velocity limiter
-      │   ├─ incremental velocity controller
-      │   └─ VNH2SP30 output
-      ├─ heartbeat (1 Hz)
-      └─ configurable telemetry stream
+```mermaid
+flowchart TB
+    ARDUINO["Arduino loop"] --> APP["MachineApplication::runOnce()"]
+    APP --> SERIAL["Bounded serial RX/TX service"]
+    APP --> TICK["Fixed-deadline control tick<br/>500 Hz"]
+    TICK --> ENCODER["Encoder snapshot +<br/>velocity estimate"]
+    ENCODER --> SAFETY["Current / diagnostic / encoder<br/>safety checks"]
+    SAFETY --> LIMITER["Profile → jerk / acceleration /<br/>velocity limiter"]
+    LIMITER --> CONTROLLER["Incremental velocity controller"]
+    CONTROLLER --> DRIVER["VNH2SP30 output"]
+    APP --> HEARTBEAT["Heartbeat<br/>1 Hz"]
+    APP --> TELEMETRY["Configurable telemetry stream"]
 ```
 
 Missed control ticks are never replayed against stale sensor data. The scheduler preserves its deadline phase, uses the actual elapsed `dt`, and latches a fault when lateness exceeds two periods. Serial parsing and transmission are bounded; no control tick builds a `String`, grows a container, writes NVS, or emits serial output.
@@ -70,11 +62,17 @@ Profiles are fixed-capacity structures (8 profiles, 16 waypoints each). Fixed ca
 
 ## Safety state machine
 
-```text
-DISARMED → ARM command → ARMED → RUN command → RUNNING
-    ↑                       │                       │
-    └──────── STOP ─────────┴──────── STOP ─────────┘
-                            any fault → FAULT → clear → DISARMED
+```mermaid
+stateDiagram-v2
+    [*] --> DISARMED
+    DISARMED --> ARMED: ARM (safety checks pass)
+    ARMED --> RUNNING: RUN
+    ARMED --> DISARMED: STOP
+    RUNNING --> DISARMED: STOP or profile complete
+    DISARMED --> FAULT: fault
+    ARMED --> FAULT: fault
+    RUNNING --> FAULT: fault
+    FAULT --> DISARMED: CLEAR (inputs healthy)
 ```
 
 Manual duty expires automatically. Characterization requires the literal `CONFIRM_UNLOADED`, tests both directions, pauses before reversal, measures breakaway duty and maximum velocity, then saves the motor characteristics. Current sense and DIAG are secondary protection; the physical fuse and emergency stop remain primary.

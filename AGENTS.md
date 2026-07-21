@@ -7,4 +7,4 @@
 - Binary protocol changes require a message ID, bounded payload, CRC test, and an update to `docs/protocol.md`.
 - Motor commands must pass through the safety state machine. No command handler may write PWM pins directly.
 - Persisted structures require a schema-version bump when their layout or meaning changes.
-
+- Use Mermaid for architecture, flow, state, and wiring diagrams in Markdown. Reserve text/code fences for literal source, commands, formulas, and raw output—not ASCII-art charts.

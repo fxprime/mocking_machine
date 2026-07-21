@@ -56,10 +56,11 @@ Firmware leaves driver diagnostic monitoring disabled by default, so EN/DIAG may
 
 CS can approach the module logic rail and is noisy under PWM. A practical starting network is:
 
-```text
-module CS ── 15 kΩ ──┬── GPIO34
-                     ├── 10 kΩ ── GND
-                     └── 1 µF  ── GND
+```mermaid
+flowchart LR
+    CS["VNH2SP30 CS"] --> R15["15 kΩ"] --> ADC["GPIO34 / ADC1"]
+    ADC --> R10["10 kΩ"] --> GND["GND"]
+    ADC --> C1["1 µF"] --> GND
 ```
 
 This scales 5 V to about 2 V and low-pass filters PWM ripple. The default firmware gain is only a starting estimate for that divider. Calibrate against a trusted current meter with `current calibrate <A>` or the browser dialog. The vendor notes approximately 10% sense accuracy, poorer low-current performance, direction-dependent variation, and a need for more filtering than the module's small capacitor. Do not use CS as the sole short-circuit protection.
@@ -70,10 +71,11 @@ Current-sense fault protection is disabled by default because an unconnected or 
 
 Connect the divider to GPIO36:
 
-```text
-driver motor V+ ── 6.8 kΩ ──┬── GPIO36
-                            ├── 1.0 kΩ ── GND
-                            └── 100 nF ── GND  (recommended)
+```mermaid
+flowchart LR
+    VIN["Driver motor V+"] --> R68["6.8 kΩ"] --> ADC["GPIO36 / ADC1"]
+    ADC --> R1["1.0 kΩ"] --> GND["GND"]
+    ADC --> C100["100 nF<br/>(recommended)"] --> GND
 ```
 
 The nominal divider gain is `7.8`; 16 V at the driver becomes approximately 2.05 V at GPIO36. Use stable 1% resistors at minimum, or 0.1% parts when repeatability across temperature matters. The browser VIN calibration dialog averages 64 ADC readings and recalculates the actual gain from a trusted multimeter value. Firmware then applies configurable 5.5 V undervoltage and 16.0 V overvoltage limits. These software limits do not replace supply transient protection.

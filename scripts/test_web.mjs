@@ -13,6 +13,12 @@ assert.match(resultDescription(4), /safely disarmed/);
 const appSource = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../web/index.html", import.meta.url), "utf8");
 const firmwareSource = await readFile(new URL("../src/app/MachineApplication.cpp", import.meta.url), "utf8");
+const companyLogo = await readFile(new URL("../web/assets/modulemore-logo.png", import.meta.url));
+assert.match(indexSource, /class="product-footer"[\s\S]*Thanabadee Bulunseechart[\s\S]*Modulemore Co\., Ltd\./,
+  "GUI must display the product author and company credit");
+assert.match(indexSource, /src="assets\/modulemore-logo\.png"[^>]*alt="Modulemore Co\., Ltd\. logo"/,
+  "Company logo must have a stable asset path and accessible alternative text");
+assert.ok(companyLogo.byteLength > 0, "Company logo asset must be packaged with the web console");
 assert.match(indexSource, /parameterRows[^>]*><tr><td colspan="3">Connect to load firmware parameters/);
 assert.match(appSource, /Connected; waiting for a valid SETTINGS frame/);
 assert.match(appSource, /id === MSG\.HEARTBEAT[\s\S]*requestDeviceSynchronization/,
