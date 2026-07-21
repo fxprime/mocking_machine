@@ -16,4 +16,6 @@ The noise spectrum uses the PIDReview Gaussian-integral shape and nominal scale.
 
 The estimate is not valid merely because the calculation completed. Review the accepted-window count and use a varying target such as multisine, chirp, or PRBS. A long constant-speed plateau provides little broadband excitation.
 
+The implementation runs entirely in the browser after a response test; firmware does not calculate or transmit a step response. Input is limited to the latest captured tuning run. Resampling is capped at 20,000 points, automatic FFT windows are powers of two up to 1024 samples, and the displayed response horizon is constrained to 0.05–5 s. The result is an identification estimate, not a replacement for reviewing the original velocity-tracking plot.
+
 Reference: <https://github.com/ArduPilot/WebTools/blob/main/PIDReview/PIDReview.js#L1030-L1205>

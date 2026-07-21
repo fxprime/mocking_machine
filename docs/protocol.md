@@ -133,7 +133,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 
 ### HEARTBEAT (0x0001)
 
-Device identity and current health. The host should retain the latest build string and settings schema with every exported dataset.
+Device identity and current health. These fields allow a host to associate data with a firmware build and settings schema. The current browser reads heartbeat state/faults but does not yet include the build string in CSV exports.
 
 | Offset | Field name | Type | Units / values | Description |
 |---:|---|---|---|---|
@@ -463,7 +463,7 @@ Aborting, stopping, producing an invalid result, or faulting before completion l
 | Value | Name | Description |
 |---:|---|---|
 | `0x00000000` | `NONE` | No fault |
-| `0x00000001` | `CONTROL_OVERRUN` | 500 Hz control deadline exceeded |
+| `0x00000001` | `CONTROL_OVERRUN` | Configured control deadline exceeded by more than two periods while motor output was active |
 | `0x00000002` | `DRIVER_DIAGNOSTIC` | Enabled EN/DIAG input asserted |
 | `0x00000004` | `OVER_CURRENT` | Filtered current exceeded configured limit |
 | `0x00000008` | `ENCODER_TIMEOUT` | No valid encoder transition while motion was demanded |
@@ -572,21 +572,21 @@ For zero indexing, the first accepted pulse always establishes absolute phase. S
 
 ## Operational sequences
 
-### Initial connection
+### Current browser connection sequence
 
-1. Open the UART at the selected baud.
-2. Wait for a CRC-valid `HEARTBEAT` and verify protocol/settings compatibility.
-3. Send `START_STREAM`.
-4. Collect the resulting settings, profiles, load configuration, pending characterization result, and ACK.
-5. Treat telemetry as active only after a successful ACK.
+1. Open the selected Web Serial port and start the receive loop.
+2. Send `GET_SETTINGS`, then `START_STREAM` immediately; neither operation arms the machine.
+3. Collect settings, profiles, load configuration, any pending characterization result/status, and the `START_STREAM` ACK.
+4. Treat the first CRC-valid `TELEMETRY` packet as synchronization complete.
+5. Until synchronization completes, retry the two requests at most once per second. A valid heartbeat also triggers this retry path, which recovers commands lost during ESP32 reset or port opening.
 
 ### Run a stored profile
 
 1. Optionally send `SELECT_PROFILE` and wait for ACK.
 2. Send `ARM` and wait for `OK`.
-3. Start recording locally.
-4. Send `START_RUN` and wait for `OK`/running telemetry.
-5. Send `STOP_RUN` when required; the firmware also stops at profile completion.
+3. Send `START_RUN` and wait for `OK`.
+4. Arm the local recorder after that ACK; begin appending samples only when telemetry state first becomes `RUNNING`.
+5. Stop appending when telemetry leaves `RUNNING`. Send `STOP_RUN` when required; the firmware also stops at profile completion.
 
 ### Recover from a fault
 
@@ -611,7 +611,7 @@ Binary packets and newline-terminated printable ASCII commands share the upload 
 - No dynamic allocation occurs in command parsing.
 - ASCII bytes that begin with `0xB5 0x62` are interpreted as a binary frame prefix.
 
-The binary protocol is authoritative for the browser GUI. The ASCII console is intended for commissioning and debugging.
+Structured settings, telemetry, profiles, calibration status, and most actuator workflows use the binary protocol. The current browser intentionally also uses ASCII for the Overview arm button, `config save`, motor-characterization start/abort, and the free-form terminal. Those ASCII operations return text rather than sequence-correlated ACK frames.
 
 ## Compatibility
 
@@ -623,7 +623,7 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 12 | Expanded rotor-load storage from 8 to 12 slots |
 | 13 | Added characterization dynamics filter, quantile, and safety-factor settings |
 
-The firmware migrates supported older Preferences layouts while preserving prior values. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–12 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-13 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 - `TELEMETRY` rotor-position fields begin at byte 72.
 - `CHARACTERIZATION_RESULT` dynamics fields begin at byte 16.

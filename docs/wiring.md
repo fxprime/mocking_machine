@@ -14,7 +14,7 @@
 | Driver diagnostic | 35 | EN/DIAG | Optional and disabled by default; external 5 V-to-3.3 V protection required when enabled |
 | Driver VIN sense | 36 | Motor supply V+ through divider | ADC1 input-only; 6.8 kΩ / 1 kΩ divider |
 
-All pins are configurable in `MachineSettings`.
+All pins live in `MachineSettings`, but the current serial parameter API does not expose pin changes. Changing this map requires a firmware-default change (or a compatible persisted-settings migration) and rebuild.
 
 The zero-index input accepts the first rising edge as the rotor reference and captures both
 its microsecond timestamp and the current quadrature count. Later rising edges inside
@@ -63,7 +63,7 @@ flowchart LR
     ADC --> C1["1 µF"] --> GND
 ```
 
-This scales 5 V to about 2 V and low-pass filters PWM ripple. The default firmware gain is only a starting estimate for that divider. Calibrate against a trusted current meter with `current calibrate <A>` or the browser dialog. The vendor notes approximately 10% sense accuracy, poorer low-current performance, direction-dependent variation, and a need for more filtering than the module's small capacitor. Do not use CS as the sole short-circuit protection.
+This scales 5 V to about 2 V and low-pass filters PWM ripple. The default firmware gain is only a starting estimate for that divider. The browser **Calibration** page performs two non-blocking 64-sample captures, calculates gain and offset, and presents the candidate before saving. The ASCII `current calibrate <A>` command remains a simpler one-point gain calibration. The vendor notes approximately 10% sense accuracy, poorer low-current performance, direction-dependent variation, and a need for more filtering than the module's small capacitor. Do not use CS as the sole short-circuit protection.
 
 Current-sense fault protection is disabled by default because an unconnected or uncalibrated GPIO34 can produce false trips. ADC telemetry remains available. Enable protection from Parameters or with `current protection on` only after verifying the circuit; use `current protection off` to disable it again.
 
@@ -93,7 +93,7 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
    Direction is intentionally not changed by this calibration.
 3. Verify zero-index timestamp/count by turning slowly by hand.
 4. Verify INA/INB/PWM and DIAG levels with a scope or logic analyzer.
-5. Calibrate GPIO36 VIN against a multimeter, then calibrate CS with a current-limited bench supply.
-6. Secure the unloaded motor in the final guard, arm, and run `characterize start CONFIRM_UNLOADED`.
+5. Calibrate GPIO36 VIN against a multimeter, then use the two-point current calibration with a current-limited bench supply and trusted ammeter.
+6. Secure the unloaded motor in the final guard and start **Calibration → Motor characterization**. The equivalent terminal sequence is `arm` followed by `characterize start CONFIRM_UNLOADED`.
 7. Tune at low maximum duty and acceleration.
 8. Add a small imbalance only after unloaded behavior, emergency stop, enclosure, and mounting are validated.
