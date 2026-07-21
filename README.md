@@ -34,7 +34,7 @@ flowchart TB
 
 | รายการ | ค่าในเฟิร์มแวร์ปัจจุบัน |
 |---|---|
-| Wire protocol / settings schema | Version 1 / schema 13 |
+| Wire protocol / settings schema | Version 1 / schema 16 |
 | Control loop | ค่าเริ่มต้น 2,000 µs หรือ 500 Hz |
 | UART / telemetry | ค่าเริ่มต้น 115200 bit/s / 50 Hz |
 | Encoder CPR | ค่าเริ่มต้น 184 counts/rev เป็น placeholder; ต้องสอบเทียบกับเครื่องจริง |
@@ -76,6 +76,7 @@ flowchart TB
 
 GUI ไม่ต้องติดตั้ง dependency เพิ่ม ใช้งานผ่าน Chrome หรือ Edge บน desktop และรองรับ keyboard/pointer ประกอบด้วยหน้า:
 
+- **แถบสถานะด้านบน** — badge สองแถวแสดงอัตรา RX/TX, telemetry rate และ dropout; คลิกเพื่อดูรายละเอียด frame rate, message rate, อายุข้อมูล และ CRC/framing error
 - **Overview** — สถานะเครื่อง telemetry ตำแหน่งโรเตอร์ การตั้งมวล และกราฟความเร็ว
 - **PID tuning** — ทดสอบ profile/manual step, velocity tracking และ estimated step response
 - **Profiles** — สร้าง แก้ไข ตรวจ feasibility เลือก default และทดลองโปรไฟล์

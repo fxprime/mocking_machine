@@ -21,51 +21,67 @@
   </header>
 
   <main>
-    <nav class="tabs" aria-label="Console sections">
-      <button class="tab active" data-page="overview">Overview</button>
-      <button class="tab" data-page="tuning">PID tuning</button>
-      <button class="tab" data-page="profiles">Profiles</button>
-      <button class="tab" data-page="motorTest">Motor test</button>
-      <button class="tab" data-page="parameters">Parameters</button>
-      <button class="tab" data-page="calibration">Calibration</button>
-      <button class="tab" data-page="terminal">Terminal</button>
-    </nav>
+    <div class="tab-strip">
+      <nav class="tabs" aria-label="Console sections">
+        <button class="tab active" data-page="overview">Overview</button>
+        <button class="tab" data-page="tuning">PID tuning</button>
+        <button class="tab" data-page="profiles">Profiles</button>
+        <button class="tab" data-page="motorTest">Motor test</button>
+        <button class="tab" data-page="parameters">Parameters</button>
+        <button class="tab" data-page="calibration">Calibration</button>
+        <button class="tab" data-page="terminal">Terminal</button>
+      </nav>
+      <button id="serialLinkBadge" class="serial-link-badge" type="button" aria-haspopup="dialog" aria-controls="serialLinkDialog" title="Open complete serial-link diagnostics">
+        <span class="serial-summary-row">
+          <span id="serialLinkState" class="status-badge offline">● Offline</span>
+          <span><abbr title="Receive">RX</abbr> <b id="serialRxRate">0.00</b> kB/s</span>
+          <span><abbr title="Transmit">TX</abbr> <b id="serialTxRate">0.00</b> kB/s</span>
+        </span>
+        <span class="serial-summary-row">
+          <span><abbr title="Telemetry">TEL</abbr> <b id="serialTelemetryRate">0.0</b> Hz</span>
+          <span>DROP <b id="serialDropouts">0</b></span>
+          <span class="serial-more">Details…</span>
+        </span>
+      </button>
+    </div>
 
     <section id="overview" class="page active">
       <div id="faultBanner" class="fault-banner with-action hidden" role="alert">
         <span>▲ Firmware fault: <span id="faultText"></span></span>
         <button id="clearFaultButton">Clear / recheck faults</button>
       </div>
-      <div class="metric-grid">
-        <article class="metric"><span>Machine state</span><strong id="machineState">DISCONNECTED</strong></article>
-        <article class="metric"><span>Desired velocity</span><strong><b id="desiredVelocity">0.0</b> rad/s</strong></article>
-        <article class="metric"><span>Measured velocity</span><strong><b id="measuredVelocity">0.0</b> rad/s</strong></article>
-        <article class="metric"><span>Motor current</span><strong><b id="motorCurrent">0.00</b> A</strong></article>
-        <article class="metric"><span>Driver VIN</span><strong><b id="supplyVoltage">0.00</b> V</strong></article>
-        <article class="metric rotor-position-metric">
-          <span>Rotor position</span>
-          <div class="rotor-readout">
-            <div id="rotorDial" class="rotor-dial unreferenced" role="img" aria-label="Waiting for the first zero-index detection">
-              <div id="rotorNeedle" class="rotor-needle"></div><div class="rotor-zero-mark">0</div>
+      <div class="overview-status-layout">
+        <div class="metric-grid overview-metrics">
+          <article class="metric"><span>Machine state</span><strong id="machineState">DISCONNECTED</strong></article>
+          <article class="metric"><span>Driver VIN</span><strong><b id="supplyVoltage">0.00</b> V</strong></article>
+          <article class="metric"><span>Desired velocity</span><strong><b id="desiredVelocity">0.0</b> rad/s</strong></article>
+          <article class="metric"><span>Measured velocity</span><strong><b id="measuredVelocity">0.0</b> rad/s</strong></article>
+          <article class="metric"><span>Motor current</span><strong><b id="motorCurrent">0.00</b> A</strong></article>
+          <article class="metric rotor-position-metric">
+            <span>Rotor position</span>
+            <div class="rotor-readout">
+              <div id="rotorDial" class="rotor-dial unreferenced" role="img" aria-label="Waiting for the first zero-index detection">
+                <div id="rotorNeedle" class="rotor-needle"></div><div class="rotor-zero-mark">0</div>
+              </div>
+              <div><strong><b id="rotorPosition">—</b>°</strong><small id="zeroIndexStatus">Waiting for zero index</small></div>
             </div>
-            <div><strong><b id="rotorPosition">—</b>°</strong><small id="zeroIndexStatus">Waiting for zero index</small></div>
+          </article>
+        </div>
+        <article class="panel rotor-load-panel">
+          <div class="panel-heading">
+            <div><h2>Rotor load setup</h2><p>Click a 30° slot to label the installed imbalance strength. The drawing records the physical setup; it does not move the load.</p></div>
+            <span id="loadSetupStatus" class="status-badge offline">0 active slots</span>
+          </div>
+          <div class="rotor-load-layout">
+            <svg id="rotorLoadDiagram" class="rotor-load-diagram" viewBox="0 0 420 420" role="group" aria-label="Twelve rotor load positions"></svg>
+            <div class="rotor-load-summary">
+              <h3>Installed loads</h3>
+              <div id="loadSlotList" class="load-slot-list"><p class="hint">No load positions configured.</p></div>
+              <p class="hint">Changes are saved automatically while connected and disarmed. Strength is a label from 1–10 for the attached weight or load severity.</p>
+            </div>
           </div>
         </article>
       </div>
-      <article class="panel rotor-load-panel">
-        <div class="panel-heading">
-          <div><h2>Rotor load setup</h2><p>Click a 30° slot to label the installed imbalance strength. The drawing records the physical setup; it does not move the load.</p></div>
-          <span id="loadSetupStatus" class="status-badge offline">0 active slots</span>
-        </div>
-        <div class="rotor-load-layout">
-          <svg id="rotorLoadDiagram" class="rotor-load-diagram" viewBox="0 0 420 420" role="group" aria-label="Twelve rotor load positions"></svg>
-          <div class="rotor-load-summary">
-            <h3>Installed loads</h3>
-            <div id="loadSlotList" class="load-slot-list"><p class="hint">No load positions configured.</p></div>
-            <p class="hint">Changes are saved automatically while connected and disarmed. Strength is a label from 1–10 for the attached weight or load severity.</p>
-          </div>
-        </div>
-      </article>
       <article class="panel chart-panel">
         <div class="panel-heading">
           <div><h2>Velocity response</h2><p>Desired and measured angular velocity</p></div>
@@ -339,15 +355,32 @@
 
   <footer class="product-footer">
     <div class="company-logo-frame">
-      <img src="assets/modulemore-logo.png" alt="Modulemore Co., Ltd. logo" width="244" height="85">
+      <img src="assets/modulemore-logo.png" alt="Modulemore Co., Ltd. logo" width="72" height="25">
     </div>
     <div class="product-credit">
-      <span>Author</span>
+      <span>Author:</span>
       <strong>Thanabadee Bulunseechart</strong>
-      <span>Modulemore Co., Ltd.</span>
+      <span>· Modulemore Co., Ltd.</span>
     </div>
   </footer>
 
+  <dialog id="serialLinkDialog" class="review-dialog">
+    <form method="dialog">
+      <div class="panel-heading">
+        <div><h2>Serial link diagnostics</h2><p>Browser-observed traffic and telemetry delivery for this connection.</p></div>
+        <span id="serialDialogState" class="status-badge offline">● Offline</span>
+      </div>
+      <dl class="result-grid serial-detail-grid">
+        <div><dt>RX traffic</dt><dd><b id="serialDialogRxRate">0.00</b> kB/s</dd><small id="serialRxFrames">0.0 valid frames/s</small></div>
+        <div><dt>TX traffic</dt><dd><b id="serialDialogTxRate">0.00</b> kB/s</dd><small id="serialTxMessages">0.0 messages/s</small></div>
+        <div><dt>Telemetry delivery</dt><dd><b id="serialDialogTelemetryRate">0.0</b> Hz</dd><small id="serialFrameAge">No valid frame received</small></div>
+        <div><dt>Estimated dropouts</dt><dd id="serialDialogDropouts">0</dd><small id="serialDropoutPercent">0.00% estimated loss</small></div>
+        <div class="serial-integrity-detail"><dt>Parser integrity</dt><dd id="serialIntegrityErrors">0 CRC · 0 framing errors</dd></div>
+      </dl>
+      <p class="hint">Dropouts are estimated from device timestamp gaps at the configured stream rate. CRC and framing errors are parser totals for the current connection.</p>
+      <div class="dialog-actions"><button value="close" class="primary">Close</button></div>
+    </form>
+  </dialog>
   <dialog id="safetyDialog">
     <form method="dialog"><h2>Confirm physical actuation</h2><p id="safetyMessage"></p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="confirm" class="danger">I have made the rig safe</button></div></form>
   </dialog>
@@ -413,6 +446,10 @@
         <div><dt>Reverse acceleration (robust peak)</dt><dd><span id="resultAccelerationReverse">—</span> rad/s²</dd></div>
         <div><dt>Forward jerk (robust peak)</dt><dd><span id="resultJerkForward">—</span> rad/s³</dd></div>
         <div><dt>Reverse jerk (robust peak)</dt><dd><span id="resultJerkReverse">—</span> rad/s³</dd></div>
+        <div><dt>Forward model gain</dt><dd><span id="resultModelGainForward">—</span> rad/s per duty</dd></div>
+        <div><dt>Reverse model gain</dt><dd><span id="resultModelGainReverse">—</span> rad/s per duty</dd></div>
+        <div><dt>Forward time constant</dt><dd><span id="resultModelTimeForward">—</span> s</dd></div>
+        <div><dt>Reverse time constant</dt><dd><span id="resultModelTimeReverse">—</span> s</dd></div>
         <div><dt>Recommended acceleration</dt><dd><span id="resultRecommendedAcceleration">—</span> rad/s² <small id="resultAccelerationRecommendationDetail"></small></dd></div>
         <div><dt>Recommended jerk</dt><dd><span id="resultRecommendedJerk">—</span> rad/s³ <small id="resultJerkRecommendationDetail"></small></dd></div>
       </dl>
@@ -421,7 +458,7 @@
         <label class="checkbox-option"><input id="applyCharacterizedAcceleration" type="checkbox"> Apply recommended maximum acceleration</label>
         <label class="checkbox-option"><input id="applyCharacterizedJerk" type="checkbox"> Apply recommended maximum jerk</label>
       </fieldset>
-      <p class="hint">Save always applies motor characteristics and the conservative velocity clamp. Acceleration and jerk remain unchanged unless selected above; recommendations can only lower existing limits. Waypoint profiles are constrained if acceleration is lowered.</p>
+      <p class="hint">Save always applies motor characteristics, the Kalman observer model, and the conservative velocity clamp. Acceleration and jerk remain unchanged unless selected above; recommendations can only lower existing limits. Waypoint profiles are constrained if acceleration is lowered.</p>
       <div class="dialog-actions"><button id="discardCharacterization" value="discard">Discard result</button><button id="saveCharacterization" value="save" class="primary">Apply and save</button></div>
     </form>
   </dialog>

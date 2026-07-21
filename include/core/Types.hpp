@@ -6,6 +6,11 @@
 namespace mm {
 
 enum class StopMode : uint8_t { Coast = 0, BrakeToGround = 1, BrakeToSupply = 2 };
+enum class VelocityEstimatorMethod : uint8_t {
+  LowPass = 0,
+  Kalman = 1,
+  WindowedAccelerationPrediction = 2,
+};
 enum class RunState : uint8_t { Disarmed = 0, Armed = 1, Running = 2, Fault = 3 };
 enum class ProfileKind : uint8_t { Ramp = 0, Sine = 1, Waypoints = 2 };
 
@@ -52,6 +57,17 @@ struct MotorCharacteristics {
   float current_gain_a_per_v = 6.5F;
   float current_offset_v = 0.0F;
   float current_filter_cutoff_hz = 20.0F;
+};
+
+struct MotorModelConfiguration {
+  // Zero gains leave the model observer disabled and select the legacy low-pass fallback.
+  float velocity_gain_forward_rad_s_per_duty = 0.0F;
+  float velocity_gain_reverse_rad_s_per_duty = 0.0F;
+  float time_constant_forward_s = 0.0F;
+  float time_constant_reverse_s = 0.0F;
+  float velocity_process_noise_rad_s2 = 25.0F;
+  float disturbance_process_noise_rad_s3 = 100.0F;
+  float encoder_measurement_noise_counts = 0.5F;
 };
 
 struct VoltageSenseConfiguration {
@@ -162,7 +178,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 13;
+  static constexpr uint32_t kSchemaVersion = 16;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};
@@ -178,6 +194,9 @@ struct MachineSettings {
   std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles{};
   int8_t motor_direction = 1;
   StopMode stop_mode = StopMode::BrakeToGround;
+  MotorModelConfiguration motor_model{};
+  VelocityEstimatorMethod velocity_estimator_method = VelocityEstimatorMethod::LowPass;
+  uint32_t velocity_acceleration_window_samples = 5U;
 };
 
 struct TelemetrySample {

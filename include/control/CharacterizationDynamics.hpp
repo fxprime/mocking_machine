@@ -80,4 +80,82 @@ class DynamicsEstimator {
   P2QuantileEstimator jerk_quantile_{};
 };
 
+// Allocation-free least-squares identification of v[k+1] = a*v[k] + b*u[k].
+// Characterization feeds velocity and applied-duty magnitudes from one direction.
+class FirstOrderMotorIdentifier {
+ public:
+  void reset() {
+    initialized_ = false;
+    count_ = 0U;
+    previous_velocity_ = 0.0F;
+    previous_duty_ = 0.0F;
+    sum_dt_s_ = 0.0F;
+    mean_velocity_ = 0.0F;
+    mean_next_velocity_ = 0.0F;
+    mean_duty_ = 0.0F;
+    velocity_variance_sum_ = 0.0F;
+    velocity_cross_sum_ = 0.0F;
+  }
+
+  void update(float velocity_rad_s, float applied_duty, float dt_s) {
+    velocity_rad_s = std::fabs(velocity_rad_s);
+    applied_duty = std::fabs(applied_duty);
+    if (!std::isfinite(velocity_rad_s) || !std::isfinite(applied_duty) ||
+        !std::isfinite(dt_s) || dt_s <= 0.0F || applied_duty < 0.01F) {
+      return;
+    }
+    if (!initialized_) {
+      previous_velocity_ = velocity_rad_s;
+      previous_duty_ = applied_duty;
+      initialized_ = true;
+      return;
+    }
+    ++count_;
+    const float inverse_count = 1.0F / static_cast<float>(count_);
+    const float velocity_delta = previous_velocity_ - mean_velocity_;
+    mean_velocity_ += velocity_delta * inverse_count;
+    const float next_velocity_delta = velocity_rad_s - mean_next_velocity_;
+    mean_next_velocity_ += next_velocity_delta * inverse_count;
+    velocity_variance_sum_ += velocity_delta * (previous_velocity_ - mean_velocity_);
+    velocity_cross_sum_ += velocity_delta * (velocity_rad_s - mean_next_velocity_);
+    mean_duty_ += (previous_duty_ - mean_duty_) * inverse_count;
+    sum_dt_s_ += dt_s;
+    previous_velocity_ = velocity_rad_s;
+    previous_duty_ = applied_duty;
+  }
+
+  bool result(float& velocity_gain_rad_s_per_duty, float& time_constant_s) const {
+    if (count_ < 20U || sum_dt_s_ <= 0.0F) return false;
+    if (!std::isfinite(velocity_variance_sum_) || velocity_variance_sum_ <= 1.0e-6F ||
+        mean_duty_ < 0.01F) {
+      return false;
+    }
+    const float a = velocity_cross_sum_ / velocity_variance_sum_;
+    const float intercept = mean_next_velocity_ - a * mean_velocity_;
+    const float b = intercept / mean_duty_;
+    const float dt_s = sum_dt_s_ / static_cast<float>(count_);
+    if (!std::isfinite(a) || !std::isfinite(b) || a <= 0.0F || a >= 0.99999F ||
+        b <= 0.0F) {
+      return false;
+    }
+    time_constant_s = -dt_s / std::log(a);
+    velocity_gain_rad_s_per_duty = b / (1.0F - a);
+    return std::isfinite(time_constant_s) && std::isfinite(velocity_gain_rad_s_per_duty) &&
+        time_constant_s >= 0.005F && time_constant_s <= 5.0F &&
+        velocity_gain_rad_s_per_duty >= 1.0F && velocity_gain_rad_s_per_duty <= 1000.0F;
+  }
+
+ private:
+  bool initialized_ = false;
+  uint32_t count_ = 0U;
+  float previous_velocity_ = 0.0F;
+  float previous_duty_ = 0.0F;
+  float sum_dt_s_ = 0.0F;
+  float mean_velocity_ = 0.0F;
+  float mean_next_velocity_ = 0.0F;
+  float mean_duty_ = 0.0F;
+  float velocity_variance_sum_ = 0.0F;
+  float velocity_cross_sum_ = 0.0F;
+};
+
 }  // namespace mm::characterization

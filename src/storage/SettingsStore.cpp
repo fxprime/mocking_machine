@@ -312,6 +312,87 @@ struct LegacyPersistedSettingsV12 {
   uint16_t crc;
 };
 
+struct LegacyMachineSettingsV13 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+};
+
+struct LegacyPersistedSettingsV13 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV13 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV14 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+  MotorModelConfiguration motor_model;
+};
+
+struct LegacyPersistedSettingsV14 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV14 payload;
+  uint16_t crc;
+};
+
+struct LegacyMachineSettingsV15 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  EncoderConfiguration encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+  MotorModelConfiguration motor_model;
+  VelocityEstimatorMethod velocity_estimator_method;
+};
+
+struct LegacyPersistedSettingsV15 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV15 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
               "Schema-v4 to v5 migration layout assumption changed");
@@ -334,8 +415,17 @@ static_assert(sizeof(LegacyMachineSettingsV11) + 4U * sizeof(LoadEntry) ==
                   sizeof(LegacyMachineSettingsV12),
               "Schema-v11 to v12 migration layout assumption changed");
 static_assert(sizeof(LegacyMachineSettingsV12) + 3U * sizeof(float) ==
-                  sizeof(MachineSettings),
+                  sizeof(LegacyMachineSettingsV13),
               "Schema-v12 to v13 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV13) + sizeof(MotorModelConfiguration) ==
+                  sizeof(LegacyMachineSettingsV14),
+              "Schema-v13 to v14 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV14) + sizeof(uint32_t) ==
+                  sizeof(LegacyMachineSettingsV15),
+              "Schema-v14 to v15 migration layout assumption changed");
+static_assert(sizeof(LegacyMachineSettingsV15) + sizeof(uint32_t) ==
+                  sizeof(MachineSettings),
+              "Schema-v15 to v16 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
                        ControlConfiguration& target) {
@@ -449,7 +539,11 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       settings.profile_count == 0U || settings.profile_count > kMaximumProfiles ||
       settings.load_setting.count > kMaximumLoads || settings.serial.stream_rate_hz == 0U ||
       settings.serial.stream_rate_hz > 500U || settings.serial.baud < 9600U ||
-      settings.serial.baud > 921600U) {
+      settings.serial.baud > 921600U ||
+      static_cast<uint8_t>(settings.velocity_estimator_method) >
+          static_cast<uint8_t>(VelocityEstimatorMethod::WindowedAccelerationPrediction) ||
+      settings.velocity_acceleration_window_samples < 2U ||
+      settings.velocity_acceleration_window_samples > 32U) {
     return false;
   }
   if (!finite(settings.control.kp) || !finite(settings.control.ki) ||
@@ -462,6 +556,13 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.motor.current_gain_a_per_v) ||
       !finite(settings.motor.current_offset_v) ||
       !finite(settings.motor.current_filter_cutoff_hz) ||
+      !finite(settings.motor_model.velocity_gain_forward_rad_s_per_duty) ||
+      !finite(settings.motor_model.velocity_gain_reverse_rad_s_per_duty) ||
+      !finite(settings.motor_model.time_constant_forward_s) ||
+      !finite(settings.motor_model.time_constant_reverse_s) ||
+      !finite(settings.motor_model.velocity_process_noise_rad_s2) ||
+      !finite(settings.motor_model.disturbance_process_noise_rad_s3) ||
+      !finite(settings.motor_model.encoder_measurement_noise_counts) ||
       !finite(settings.safety.encoder_timeout_velocity_rad_s) ||
       !finite(settings.encoder.zero_index_correction_gain) ||
       !finite(settings.encoder.zero_index_minimum_separation_revolutions) ||
@@ -491,6 +592,12 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       settings.motor.current_gain_a_per_v <= 0.0F ||
       settings.motor.current_filter_cutoff_hz < 0.1F ||
       settings.motor.current_filter_cutoff_hz > 200.0F ||
+      settings.motor_model.velocity_process_noise_rad_s2 <= 0.0F ||
+      settings.motor_model.velocity_process_noise_rad_s2 > 10000.0F ||
+      settings.motor_model.disturbance_process_noise_rad_s3 <= 0.0F ||
+      settings.motor_model.disturbance_process_noise_rad_s3 > 100000.0F ||
+      settings.motor_model.encoder_measurement_noise_counts <= 0.0F ||
+      settings.motor_model.encoder_measurement_noise_counts > 10.0F ||
       settings.encoder.estimator_min_counts == 0U ||
       settings.encoder.estimator_min_counts > 32U ||
       settings.encoder.estimator_max_window_us < 1000U ||
@@ -530,6 +637,25 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.characterization.recommendation_safety_factor) ||
       settings.characterization.recommendation_safety_factor < 0.10F ||
       settings.characterization.recommendation_safety_factor > 1.0F) {
+    return false;
+  }
+  const bool motor_model_disabled =
+      settings.motor_model.velocity_gain_forward_rad_s_per_duty == 0.0F &&
+      settings.motor_model.velocity_gain_reverse_rad_s_per_duty == 0.0F &&
+      settings.motor_model.time_constant_forward_s == 0.0F &&
+      settings.motor_model.time_constant_reverse_s == 0.0F;
+  const bool motor_model_valid =
+      settings.motor_model.velocity_gain_forward_rad_s_per_duty >= 1.0F &&
+      settings.motor_model.velocity_gain_forward_rad_s_per_duty <= 1000.0F &&
+      settings.motor_model.velocity_gain_reverse_rad_s_per_duty >= 1.0F &&
+      settings.motor_model.velocity_gain_reverse_rad_s_per_duty <= 1000.0F &&
+      settings.motor_model.time_constant_forward_s >= 0.005F &&
+      settings.motor_model.time_constant_forward_s <= 5.0F &&
+      settings.motor_model.time_constant_reverse_s >= 0.005F &&
+      settings.motor_model.time_constant_reverse_s <= 5.0F;
+  if (!motor_model_disabled && !motor_model_valid) return false;
+  if (settings.velocity_estimator_method == VelocityEstimatorMethod::Kalman &&
+      !motor_model_valid) {
     return false;
   }
   bool occupied_slots[kRotorSlotCount]{};
@@ -615,6 +741,95 @@ bool SettingsStore::load(MachineSettings& settings) {
         blob.payload_size == sizeof(MachineSettings) && blob.crc == crc) {
       settings = blob.payload;
       loaded = validate(settings);
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV15)) {
+    LegacyPersistedSettingsV15 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 15U && blob.payload.schema_version == 15U &&
+        blob.payload_size == sizeof(blob.payload) && blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      settings.motor_model = blob.payload.motor_model;
+      settings.velocity_estimator_method = blob.payload.velocity_estimator_method;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV14)) {
+    LegacyPersistedSettingsV14 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 14U && blob.payload.schema_version == 14U &&
+        blob.payload_size == sizeof(blob.payload) && blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      settings.motor_model = blob.payload.motor_model;
+      const bool had_active_motor_model =
+          settings.motor_model.velocity_gain_forward_rad_s_per_duty > 0.0F &&
+          settings.motor_model.velocity_gain_reverse_rad_s_per_duty > 0.0F &&
+          settings.motor_model.time_constant_forward_s > 0.0F &&
+          settings.motor_model.time_constant_reverse_s > 0.0F;
+      settings.velocity_estimator_method = had_active_motor_model
+          ? VelocityEstimatorMethod::Kalman
+          : VelocityEstimatorMethod::LowPass;
+      loaded = validate(settings);
+      migrated = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV13)) {
+    LegacyPersistedSettingsV13 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        blob.schema_version == 13U && blob.payload.schema_version == 13U &&
+        blob.payload_size == sizeof(blob.payload) && blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      settings.encoder = blob.payload.encoder;
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      loaded = validate(settings);
+      migrated = loaded;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV12)) {
     LegacyPersistedSettingsV12 blob{};

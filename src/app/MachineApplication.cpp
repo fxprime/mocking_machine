@@ -79,6 +79,15 @@ struct SettingsPayload {
   float characterization_dynamics_filter_cutoff_hz;
   float characterization_dynamics_quantile;
   float characterization_recommendation_safety_factor;
+  float motor_model_gain_forward_rad_s_per_duty;
+  float motor_model_gain_reverse_rad_s_per_duty;
+  float motor_model_time_constant_forward_s;
+  float motor_model_time_constant_reverse_s;
+  float motor_model_velocity_process_noise_rad_s2;
+  float motor_model_disturbance_process_noise_rad_s3;
+  float motor_model_encoder_measurement_noise_counts;
+  uint8_t velocity_estimator_method;
+  uint8_t velocity_acceleration_window_samples;
 };
 
 struct TelemetryPayload {
@@ -158,6 +167,8 @@ enum class ParameterId : uint16_t {
   CharacterizationDynamicsFilterCutoffHz,
   CharacterizationDynamicsQuantile,
   CharacterizationRecommendationSafetyFactor,
+  VelocityEstimatorMethod,
+  VelocityAccelerationWindowSamples,
 };
 
 struct ParameterPayload {
@@ -244,6 +255,10 @@ struct CharacterizationResultPayload {
   float acceleration_reverse_rad_s2;
   float jerk_forward_rad_s3;
   float jerk_reverse_rad_s3;
+  float velocity_gain_forward_rad_s_per_duty;
+  float velocity_gain_reverse_rad_s_per_duty;
+  float time_constant_forward_s;
+  float time_constant_reverse_s;
 };
 
 struct CharacterizationActionPayload {
@@ -264,7 +279,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 143U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 173U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -272,7 +287,7 @@ static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
 static_assert(sizeof(TelemetryPayload) == 84U, "Update protocol and browser TELEMETRY decoder");
 static_assert(sizeof(SupplyVoltageCalibrationPayload) == 4U,
               "Supply calibration payload must remain one float");
-static_assert(sizeof(CharacterizationResultPayload) == 32U,
+static_assert(sizeof(CharacterizationResultPayload) == 48U,
               "Characterization result payload layout changed");
 static_assert(sizeof(CharacterizationStatusPayload) == 10U,
               "Characterization status payload layout changed");
@@ -342,7 +357,10 @@ void MachineApplication::begin() {
     state_ = RunState::Fault;
   }
   configureVelocityController();
-  velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s);
+  velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
+                                settings_.motor_model, settings_.velocity_estimator_method,
+                                settings_.safety.max_acceleration_rad_s2,
+                                settings_.velocity_acceleration_window_samples);
   current_filter_.configure(settings_.motor.current_filter_cutoff_hz);
   motion_limiter_.configure(settings_.safety);
   const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
@@ -433,7 +451,8 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   telemetry_.rotor_position_deg = rotor_phase_tracker_.update(
       telemetry_.encoder_count, zero_capture.encoder_count, zero_capture.sequence);
   telemetry_.measured_velocity_rad_s = velocity_estimator_.update(
-      telemetry_.encoder_count, scheduled_us);
+      telemetry_.encoder_count, scheduled_us, motor_.appliedDuty(),
+      state_ == RunState::Disarmed);
   const float current_sense_voltage_v = motor_.currentSenseVoltage();
   telemetry_.current_a = current_filter_.update(
       motor_.currentAmperesFromVoltage(current_sense_voltage_v), dt_s);
@@ -679,6 +698,7 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
         characterization_stage_ = CharacterizationStage::ForwardMaximum;
         characterization_peak_velocity_ = 0.0F;
         characterization_dynamics_estimator_.reset();
+        characterization_model_identifier_.reset();
         characterization_deadline_us_ = scheduled_us +
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
@@ -687,6 +707,9 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
       motor_.command(settings_.safety.max_duty);
       characterization_dynamics_estimator_.update(
           telemetry_.measured_velocity_rad_s,
+          static_cast<float>(settings_.control.period_us) * 0.000001F);
+      characterization_model_identifier_.update(
+          telemetry_.measured_velocity_rad_s, motor_.appliedDuty(),
           static_cast<float>(settings_.control.period_us) * 0.000001F);
       characterization_peak_velocity_ = characterization::updatePeakVelocityMagnitude(
           characterization_peak_velocity_, telemetry_.measured_velocity_rad_s);
@@ -702,6 +725,14 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
             characterization_dynamics_estimator_.accelerationRadS2();
         characterization_dynamics_candidate_.jerk_forward_rad_s3 =
             characterization_dynamics_estimator_.jerkRadS3();
+        if (!characterization_model_identifier_.result(
+                characterization_model_candidate_.velocity_gain_forward_rad_s_per_duty,
+                characterization_model_candidate_.time_constant_forward_s)) {
+          faults_ |= FaultInvalidConfiguration;
+          transitionToStopped();
+          state_ = RunState::Fault;
+          return;
+        }
         pause(CharacterizationStage::PauseBeforeReverseMaximum);
       }
       return;
@@ -711,6 +742,7 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
         characterization_stage_ = CharacterizationStage::ReverseMaximum;
         characterization_peak_velocity_ = 0.0F;
         characterization_dynamics_estimator_.reset();
+        characterization_model_identifier_.reset();
         characterization_deadline_us_ = scheduled_us +
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
@@ -719,6 +751,9 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
       motor_.command(-settings_.safety.max_duty);
       characterization_dynamics_estimator_.update(
           telemetry_.measured_velocity_rad_s,
+          static_cast<float>(settings_.control.period_us) * 0.000001F);
+      characterization_model_identifier_.update(
+          telemetry_.measured_velocity_rad_s, motor_.appliedDuty(),
           static_cast<float>(settings_.control.period_us) * 0.000001F);
       characterization_peak_velocity_ = characterization::updatePeakVelocityMagnitude(
           characterization_peak_velocity_, telemetry_.measured_velocity_rad_s);
@@ -734,6 +769,14 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
             characterization_dynamics_estimator_.accelerationRadS2();
         characterization_dynamics_candidate_.jerk_reverse_rad_s3 =
             characterization_dynamics_estimator_.jerkRadS3();
+        if (!characterization_model_identifier_.result(
+                characterization_model_candidate_.velocity_gain_reverse_rad_s_per_duty,
+                characterization_model_candidate_.time_constant_reverse_s)) {
+          faults_ |= FaultInvalidConfiguration;
+          transitionToStopped();
+          state_ = RunState::Fault;
+          return;
+        }
         characterization_result_pending_ = true;
         characterization_notification_pending_ = true;
         transitionToStopped();
@@ -1089,6 +1132,20 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.characterization.dynamics_quantile = update.value; break;
         case ParameterId::CharacterizationRecommendationSafetyFactor:
           candidate.characterization.recommendation_safety_factor = update.value; break;
+        case ParameterId::VelocityEstimatorMethod:
+          if (!whole(update.value) || update.value > 2.0F) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
+          }
+          candidate.velocity_estimator_method =
+              static_cast<mm::VelocityEstimatorMethod>(static_cast<uint8_t>(update.value));
+          break;
+        case ParameterId::VelocityAccelerationWindowSamples:
+          if (!whole(update.value) || update.value < 2.0F || update.value > 32.0F) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
+          }
+          candidate.velocity_acceleration_window_samples =
+              static_cast<uint32_t>(update.value);
+          break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -1108,7 +1165,13 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       settings_ = candidate;
       configureVelocityController();
       motion_limiter_.configure(settings_.safety);
-      velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s);
+      velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
+                                    settings_.motor_model,
+                                    settings_.velocity_estimator_method,
+                                    settings_.safety.max_acceleration_rad_s2,
+                                    settings_.velocity_acceleration_window_samples);
+      velocity_estimator_.reset(encoder_.count(),
+          static_cast<uint64_t>(esp_timer_get_time()));
       motor_.setSafety(settings_.safety);
       motor_.setCharacteristics(settings_.motor);
       motor_.setMotorDirection(settings_.motor_direction);
@@ -1418,8 +1481,12 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
               characterization_dynamics_candidate_,
               settings_.characterization.recommendation_safety_factor,
               (action.flags & kCharacterizationApplyAcceleration) != 0U,
-              (action.flags & kCharacterizationApplyJerk) != 0U, candidate) ||
-          !SettingsStore::validate(candidate)) {
+              (action.flags & kCharacterizationApplyJerk) != 0U, candidate)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      candidate.motor_model = characterization_model_candidate_;
+      if (!SettingsStore::validate(candidate)) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
       }
@@ -1431,6 +1498,12 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       motor_.setCharacteristics(settings_.motor);
       motor_.setSafety(settings_.safety);
       motion_limiter_.configure(settings_.safety);
+      velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
+                                    settings_.motor_model, settings_.velocity_estimator_method,
+                                    settings_.safety.max_acceleration_rad_s2,
+                                    settings_.velocity_acceleration_window_samples);
+      velocity_estimator_.reset(encoder_.count(),
+          static_cast<uint64_t>(esp_timer_get_time()));
       characterization_result_pending_ = false;
       characterization_notification_pending_ = false;
       sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
@@ -1494,6 +1567,15 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.characterization.dynamics_filter_cutoff_hz,
       settings_.characterization.dynamics_quantile,
       settings_.characterization.recommendation_safety_factor,
+      settings_.motor_model.velocity_gain_forward_rad_s_per_duty,
+      settings_.motor_model.velocity_gain_reverse_rad_s_per_duty,
+      settings_.motor_model.time_constant_forward_s,
+      settings_.motor_model.time_constant_reverse_s,
+      settings_.motor_model.velocity_process_noise_rad_s2,
+      settings_.motor_model.disturbance_process_noise_rad_s3,
+      settings_.motor_model.encoder_measurement_noise_counts,
+      static_cast<uint8_t>(settings_.velocity_estimator_method),
+      static_cast<uint8_t>(settings_.velocity_acceleration_window_samples),
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }
@@ -1582,6 +1664,10 @@ bool MachineApplication::sendCharacterizationResult(const uint16_t sequence) {
       characterization_dynamics_candidate_.acceleration_reverse_rad_s2,
       characterization_dynamics_candidate_.jerk_forward_rad_s3,
       characterization_dynamics_candidate_.jerk_reverse_rad_s3,
+      characterization_model_candidate_.velocity_gain_forward_rad_s_per_duty,
+      characterization_model_candidate_.velocity_gain_reverse_rad_s_per_duty,
+      characterization_model_candidate_.time_constant_forward_s,
+      characterization_model_candidate_.time_constant_reverse_s,
   };
   return serial_link_.send(protocol::MessageId::CharacterizationResult, sequence, &payload,
                            sizeof(payload));

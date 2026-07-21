@@ -83,7 +83,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0001` | [HEARTBEAT](#heartbeat-0x0001) | Device → host | 65 | Device identity, state, and health |
 | `0x0002` | [ACK](#ack-0x0002) | Device → host | 3 | Command result |
 | `0x0100` | [GET_SETTINGS](#get_settings-0x0100) | Host → device | 0 | Request current settings |
-| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 143 | Complete runtime settings snapshot |
+| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 173 | Complete runtime settings snapshot |
 | `0x0110` | [SET_CONTROLLER](#controller-gain-messages-0x0110-0x0114) | Host → device | 12 | Apply gains to RAM |
 | `0x0111` | [SET_DRIVER_DIAGNOSTIC](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable EN/DIAG protection |
 | `0x0112` | [SET_CURRENT_SENSE](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable overcurrent protection |
@@ -125,7 +125,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0300` | [CURRENT_CALIBRATION](#current_calibration-0x0300) | Host → device | 5 | Control two-point current calibration |
 | `0x0301` | [SUPPLY_VOLTAGE_CALIBRATION](#supply_voltage_calibration-0x0301) | Host → device | 4 | Calibrate the VIN divider |
 | `0x0302` | [CURRENT_CALIBRATION_STATUS](#current_calibration_status-0x0302) | Device → host | 27 | Current calibration progress/result |
-| `0x0310` | [CHARACTERIZATION_RESULT](#characterization_result-0x0310) | Device → host | 32 | Pending motor characterization result |
+| `0x0310` | [CHARACTERIZATION_RESULT](#characterization_result-0x0310) | Device → host | 48 | Pending motor characterization result |
 | `0x0311` | [CHARACTERIZATION_ACTION](#characterization_action-0x0311) | Host → device | 1 | Save or discard the pending result |
 | `0x0312` | [CHARACTERIZATION_STATUS](#characterization_status-0x0312) | Device → host | 10 | Live characterization progress |
 
@@ -196,9 +196,9 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 93 | `encoder_timeout_ms` | `u32` | ms | Maximum encoder-inactive time while motion is demanded |
 | 97 | `encoder_timeout_velocity_rad_s` | `f32` | rad/s | Desired-speed threshold that enables the watchdog |
 | 101 | `max_feedback_correction` | `f32` | — | Compatibility field; ignored by the active estimator |
-| 105 | `estimator_min_counts` | `u8` | counts | Compatibility field; ignored by the active estimator |
-| 106 | `estimator_max_window_us` | `u32` | µs | Compatibility field; ignored by the active estimator |
-| 110 | `estimator_stale_timeout_us` | `u32` | µs | Compatibility field; ignored by the active estimator |
+| 105 | `estimator_min_counts` | `u8` | counts | Count threshold for a Kalman encoder correction |
+| 106 | `estimator_max_window_us` | `u32` | µs | Maximum non-empty encoder measurement window |
+| 110 | `estimator_stale_timeout_us` | `u32` | µs | Zero-motion correction interval when no count arrives |
 | 114 | `current_filter_cutoff_hz` | `f32` | Hz | Current low-pass cutoff |
 | 118 | `zero_index_min_interval_us` | `u32` | µs | Time-domain index debounce interval |
 | 122 | `zero_index_correction_gain` | `f32` | 0–1 | Fraction of index phase error corrected per accepted pulse |
@@ -207,6 +207,15 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 131 | `characterization_dynamics_filter_cutoff_hz` | `f32` | Hz | Dynamics-estimator low-pass cutoff |
 | 135 | `characterization_dynamics_quantile` | `f32` | 0–1 | Robust acceleration/jerk quantile |
 | 139 | `characterization_recommendation_safety_factor` | `f32` | 0–1 | Multiplier applied to the weaker direction |
+| 143 | `motor_model_gain_forward_rad_s_per_duty` | `f32` | rad/s/duty | Identified forward steady-state velocity gain; zero disables the observer |
+| 147 | `motor_model_gain_reverse_rad_s_per_duty` | `f32` | rad/s/duty | Identified reverse steady-state velocity gain; zero disables the observer |
+| 151 | `motor_model_time_constant_forward_s` | `f32` | s | Identified forward first-order time constant |
+| 155 | `motor_model_time_constant_reverse_s` | `f32` | s | Identified reverse first-order time constant |
+| 159 | `motor_model_velocity_process_noise_rad_s2` | `f32` | (rad/s)²/s | Velocity-state process noise density |
+| 163 | `motor_model_disturbance_process_noise_rad_s3` | `f32` | (rad/s²)²/s | Load-disturbance process noise density |
+| 167 | `motor_model_encoder_measurement_noise_counts` | `f32` | counts | Encoder quantization noise used for measurement covariance |
+| 171 | `velocity_estimator_method` | `u8` | `0`–`2` | 0 low-pass; 1 motor-model Kalman; 2 encoder-window acceleration prediction |
+| 172 | `velocity_acceleration_window_samples` | `u8` | 2–32 | Circular velocity-history length for estimator method 2 |
 
 The encoder watchdog starts when desired velocity first exceeds its configured threshold. Each valid quadrature transition refreshes activity. Dropping below the threshold or stopping resets the watchdog window.
 
@@ -412,8 +421,12 @@ Pending motor characterization result. It remains in RAM and is resent when stre
 | 20 | `acceleration_reverse_rad_s2` | `f32` | rad/s² | Filtered robust reverse acceleration estimate |
 | 24 | `jerk_forward_rad_s3` | `f32` | rad/s³ | Filtered robust forward jerk estimate |
 | 28 | `jerk_reverse_rad_s3` | `f32` | rad/s³ | Filtered robust reverse jerk estimate |
+| 32 | `velocity_gain_forward_rad_s_per_duty` | `f32` | rad/s/duty | Identified forward steady-state gain |
+| 36 | `velocity_gain_reverse_rad_s_per_duty` | `f32` | rad/s/duty | Identified reverse steady-state gain |
+| 40 | `time_constant_forward_s` | `f32` | s | Identified forward first-order time constant |
+| 44 | `time_constant_reverse_s` | `f32` | s | Identified reverse first-order time constant |
 
-Dynamics use the configured online low-pass filter and robust quantile independently in each full-duty direction.
+Dynamics limits use the configured online low-pass filter and robust quantile independently in each full-duty direction. The motor model is fitted allocation-free by least squares to `v[k+1] = a*v[k] + b*u[k]`; firmware converts `a,b` to steady-state gain and time constant.
 
 ### CHARACTERIZATION_ACTION (0x0311)
 
@@ -554,9 +567,9 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 22 | `ENCODER_TIMEOUT_MS` | ms | Encoder watchdog duration |
 | 23 | `ENCODER_TIMEOUT_VELOCITY` | rad/s | Watchdog activation threshold |
 | 24 | `MAXIMUM_FEEDBACK_CORRECTION` | — | Retained for compatibility; inactive |
-| 25 | `ESTIMATOR_MINIMUM_COUNTS` | counts | Retained for compatibility; inactive |
-| 26 | `ESTIMATOR_MAXIMUM_WINDOW_US` | µs | Retained for compatibility; inactive |
-| 27 | `ESTIMATOR_STALE_TIMEOUT_US` | µs | Retained for compatibility; inactive |
+| 25 | `ESTIMATOR_MINIMUM_COUNTS` | counts | Encoder correction/window count threshold |
+| 26 | `ESTIMATOR_MAXIMUM_WINDOW_US` | µs | Maximum non-empty estimator window |
+| 27 | `ESTIMATOR_STALE_TIMEOUT_US` | µs | Zero-motion estimator window |
 | 28 | `CURRENT_SENSE_ENABLED` | `0`, `1` | Enables software overcurrent protection |
 | 29 | `CURRENT_FILTER_CUTOFF_HZ` | Hz | Current first-order low-pass cutoff; valid 0.1–200 |
 | 30 | `ZERO_INDEX_MINIMUM_INTERVAL_US` | µs | Time debounce; valid 100–1,000,000 |
@@ -565,6 +578,8 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 33 | `CHARACTERIZATION_DYNAMICS_FILTER_CUTOFF_HZ` | Hz | Dynamics filter cutoff; valid 0.5–100 |
 | 34 | `CHARACTERIZATION_DYNAMICS_QUANTILE` | 0–1 | Robust quantile; valid 0.80–0.99 |
 | 35 | `CHARACTERIZATION_RECOMMENDATION_SAFETY_FACTOR` | 0–1 | Recommendation multiplier; valid 0.10–1.0 |
+| 36 | `VELOCITY_ESTIMATOR_METHOD` | `0`, `1`, `2` | Select low-pass, characterized Kalman, or encoder-window acceleration prediction |
+| 37 | `VELOCITY_ACCELERATION_WINDOW_SAMPLES` | samples | Method-2 circular history length; valid 2–32 |
 
 Lower current-filter cutoff reduces noise but delays software overcurrent detection. Hardware current limiting and a correctly sized fuse remain mandatory.
 
@@ -599,6 +614,8 @@ For zero indexing, the first accepted pulse always establishes absolute phase. S
 
 Firmware reserves 30% of UART capacity for heartbeats, acknowledgements, settings, and terminal traffic. It computes the maximum stream rate using the 96-byte framed telemetry packet and 10 UART bits per byte. At 115200 bit/s, the accepted telemetry range is 1–84 Hz.
 
+The browser Overview measures RX/TX byte rates and valid binary-frame/message rates locally. It estimates missing telemetry from gaps between consecutive device `timestamp_us` values relative to `stream_rate_hz`. It deliberately does not use the frame `sequence` field because unsolicited device traffic and sequence-echoing command responses share the link. CRC and invalid-length framing totals are parser observations for the current browser connection; they are not firmware-side UART backpressure counters.
+
 UART baud cannot be reliably autodetected after boot. A browser may probe a short supported-rate list by reopening the selected port and waiting for a CRC-valid heartbeat. A persisted baud update is acknowledged at the old rate and takes effect after reboot.
 
 ## ASCII console
@@ -615,18 +632,27 @@ Structured settings, telemetry, profiles, calibration status, and most actuator 
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 13.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 16.
 
 | Settings schema | Change |
 |---:|---|
 | 11 | Added telemetry-rate migration |
 | 12 | Expanded rotor-load storage from 8 to 12 slots |
 | 13 | Added characterization dynamics filter, quantile, and safety-factor settings |
+| 14 | Added characterized motor model and Kalman-observer settings |
+| 15 | Added explicit velocity-estimator method selection |
+| 16 | Added method-2 circular velocity-history length |
 
-The current loader explicitly migrates valid schema 4–12 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-13 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–15 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-16 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+
+Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
+that schema enabled implicitly. Other older settings migrate to method `0`.
 
 - `TELEMETRY` rotor-position fields begin at byte 72.
 - `CHARACTERIZATION_RESULT` dynamics fields begin at byte 16.
 - The schema-13 `SETTINGS` extension begins at byte 131.
+- The schema-14 motor-model `SETTINGS` extension begins at byte 143.
+- The schema-15 estimator-method `SETTINGS` extension begins at byte 171.
+- The schema-16 acceleration-window `SETTINGS` extension begins at byte 172.
 
 Message IDs, packed field order, fixed-array capacities, and CRC behavior are protocol contracts. Any change to them requires synchronized firmware, browser, tests, and this document.

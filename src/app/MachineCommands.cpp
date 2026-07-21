@@ -386,7 +386,7 @@ void MachineApplication::commandVoltage(const int argc, char* argv[]) {
 
 void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
   if (argc == 2 && std::strcmp(argv[1], "status") == 0) {
-    Serial.printf("stage=%u pending=%s duty=%.3f velocity=%.3f start_fwd=%.3f start_rev=%.3f max_fwd=%.3f max_rev=%.3f accel_fwd=%.3f accel_rev=%.3f jerk_fwd=%.3f jerk_rev=%.3f\r\n",
+    Serial.printf("stage=%u pending=%s duty=%.3f velocity=%.3f start_fwd=%.3f start_rev=%.3f max_fwd=%.3f max_rev=%.3f accel_fwd=%.3f accel_rev=%.3f jerk_fwd=%.3f jerk_rev=%.3f model_gain_fwd=%.3f model_gain_rev=%.3f model_tau_fwd=%.4f model_tau_rev=%.4f\r\n",
                   static_cast<unsigned>(characterization_stage_),
                   characterization_result_pending_ ? "yes" : "no", characterization_duty_,
                   telemetry_.measured_velocity_rad_s,
@@ -397,7 +397,11 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
                   characterization_dynamics_candidate_.acceleration_forward_rad_s2,
                   characterization_dynamics_candidate_.acceleration_reverse_rad_s2,
                   characterization_dynamics_candidate_.jerk_forward_rad_s3,
-                  characterization_dynamics_candidate_.jerk_reverse_rad_s3);
+                  characterization_dynamics_candidate_.jerk_reverse_rad_s3,
+                  characterization_model_candidate_.velocity_gain_forward_rad_s_per_duty,
+                  characterization_model_candidate_.velocity_gain_reverse_rad_s_per_duty,
+                  characterization_model_candidate_.time_constant_forward_s,
+                  characterization_model_candidate_.time_constant_reverse_s);
     return;
   }
   if (argc == 2 && std::strcmp(argv[1], "abort") == 0) {
@@ -425,9 +429,13 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
         !characterization::applyRecommendedDynamics(
             characterization_dynamics_candidate_,
             settings_.characterization.recommendation_safety_factor,
-            argc == 3, argc == 3, candidate) ||
-        !SettingsStore::validate(candidate)) {
+            argc == 3, argc == 3, candidate)) {
       Serial.println("ERR characterization result is invalid");
+      return;
+    }
+    candidate.motor_model = characterization_model_candidate_;
+    if (!SettingsStore::validate(candidate)) {
+      Serial.println("ERR characterized motor model is invalid");
       return;
     }
     if (!settings_store_.save(candidate)) {
@@ -438,6 +446,12 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
     motor_.setCharacteristics(settings_.motor);
     motor_.setSafety(settings_.safety);
     motion_limiter_.configure(settings_.safety);
+    velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
+                                  settings_.motor_model, settings_.velocity_estimator_method,
+                                  settings_.safety.max_acceleration_rad_s2,
+                                  settings_.velocity_acceleration_window_samples);
+    velocity_estimator_.reset(encoder_.count(),
+        static_cast<uint64_t>(esp_timer_get_time()));
     characterization_result_pending_ = false;
     characterization_notification_pending_ = false;
     Serial.printf("OK characterization result applied and saved; vmax=%.3f rad/s\r\n",
@@ -452,6 +466,7 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
     return;
   }
   characterization_candidate_ = settings_.motor;
+  characterization_model_candidate_ = settings_.motor_model;
   characterization_dynamics_candidate_ = {};
   characterization_dynamics_estimator_.configure(
       settings_.characterization.dynamics_filter_cutoff_hz,

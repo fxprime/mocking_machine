@@ -58,8 +58,20 @@ assert.match(appSource, /jerkReverse:\s*data\.byteLength >= 32 \? data\.getFloat
   "GUI must decode appended characterization jerk results");
 assert.match(appSource, /applyCharacterizedAcceleration[\s\S]*\? 2 : 0[\s\S]*applyCharacterizedJerk[\s\S]*\? 4 : 0/,
   "Acceleration and jerk recommendations must be explicit opt-in action flags");
-assert.match(firmwareSource, /static_assert\(sizeof\(CharacterizationResultPayload\) == 32U/,
+assert.match(firmwareSource, /static_assert\(sizeof\(CharacterizationResultPayload\) == 48U/,
   "Firmware characterization result payload boundary must be documented in code");
+assert.match(appSource, /modelGainForward:\s*data\.byteLength >= 48 \? data\.getFloat32\(32, true\)/,
+  "GUI must decode the characterized forward motor-model gain");
+assert.match(appSource, /velocityEstimatorMethod:\s*data\.byteLength >= 172 \? data\.getUint8\(171\) : 0/,
+  "GUI must decode the velocity-estimator selector");
+assert.match(appSource, /velocityAccelerationWindowSamples:\s*data\.byteLength >= 173 \? data\.getUint8\(172\) : 5/,
+  "GUI must decode the schema-16 acceleration-history length");
+assert.match(appSource, /velocityEstimatorMethod:\s*\{ id: 36,[\s\S]*0 = low-pass,[\s\S]*1 = characterized motor-model Kalman,[\s\S]*2 = encoder-window acceleration prediction/,
+  "GUI must expose all three velocity-estimator methods through SET_PARAMETER");
+assert.match(appSource, /velocityAccelerationWindowSamples:\s*\{ id: 37,[\s\S]*Circular velocity-history length/,
+  "GUI must expose the method-2 circular history length through SET_PARAMETER");
+assert.match(indexSource, /id="resultModelTimeReverse"/,
+  "Characterization review must display the identified motor-model time constants");
 assert.match(appSource, /Math\.min\(configuredVmax, detectedLimit\)/,
   "Characterization review must show the clamped vmax before save");
 assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
@@ -71,6 +83,33 @@ assert.match(indexSource, /id="runProfileDialog"/);
 assert.match(indexSource, /id="setDefaultProfile"/);
 assert.match(indexSource, /id="rotorLoadDiagram"/);
 assert.match(indexSource, /id="loadSlotDialog"/);
+assert.match(indexSource, /class="overview-status-layout"[\s\S]*class="metric-grid overview-metrics"[\s\S]*Machine state[\s\S]*Driver VIN[\s\S]*Desired velocity[\s\S]*Measured velocity[\s\S]*Motor current[\s\S]*Rotor position[\s\S]*class="panel rotor-load-panel"/,
+  "Overview must place the ordered 2x3 machine metrics beside the rotor-load panel");
+assert.match(indexSource, /id="serialRxRate"/);
+assert.match(indexSource, /id="serialTxRate"/);
+assert.match(indexSource, /id="serialTelemetryRate"/);
+assert.match(indexSource, /id="serialDropouts"/);
+assert.match(indexSource, /id="serialIntegrityErrors"/);
+assert.match(indexSource, /class="tab-strip"[\s\S]*class="tabs"[\s\S]*class="serial-link-badge"/,
+  "Compact serial diagnostics must share the navigation row");
+assert.match(indexSource, /id="serialLinkBadge"[\s\S]*serial-summary-row[\s\S]*serial-summary-row/,
+  "Serial summary must remain a compact two-row disclosure control");
+assert.match(indexSource, /id="serialLinkDialog"[\s\S]*id="serialRxFrames"[\s\S]*id="serialIntegrityErrors"/,
+  "Detailed communication measurements must be available in a dialog");
+assert.match(appSource, /serialLinkBadge[\s\S]*serialLinkDialog[\s\S]*showModal\(\)/,
+  "Clicking the serial badge must open its diagnostics dialog");
+assert.doesNotMatch(indexSource, /communication-panel/,
+  "Serial diagnostics must not consume an Overview panel");
+assert.match(indexSource, /class="product-footer"[\s\S]*width="72" height="25"/,
+  "The author credit must use the compact logo treatment");
+assert.match(appSource, /communicationMetrics\.recordRxBytes\(value\.byteLength\)/,
+  "Serial diagnostics must measure every received byte before parsing");
+assert.match(appSource, /communicationMetrics\.recordTxBytes\(bytes\.byteLength\)/,
+  "Serial diagnostics must measure successful host writes");
+assert.match(appSource, /communicationMetrics\.recordCrcError\(\)/);
+assert.match(appSource, /communicationMetrics\.recordFramingError\(\)/);
+assert.match(appSource, /communicationMetrics\.recordTelemetry\(sample\.timestamp, settings\.streamRate\)/,
+  "Dropout estimation must use device timestamps and the configured telemetry rate");
 assert.match(appSource, /SET_DEFAULT_PROFILE:\s*0x0125/);
 assert.match(appSource, /SET_LOAD_CONFIGURATION:\s*0x0132/);
 assert.match(appSource, /runtimeProfileId = action\.profileId/,

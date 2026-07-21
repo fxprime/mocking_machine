@@ -132,7 +132,9 @@ class MachineApplication final {
   uint8_t characterization_motion_samples_ = 0;
   MotorCharacteristics characterization_candidate_{};
   characterization::DynamicsEstimator characterization_dynamics_estimator_{};
+  characterization::FirstOrderMotorIdentifier characterization_model_identifier_{};
   CharacterizationDynamicsResult characterization_dynamics_candidate_{};
+  MotorModelConfiguration characterization_model_candidate_{};
   bool characterization_result_pending_ = false;
   bool characterization_notification_pending_ = false;
   bool characterization_status_pending_ = false;

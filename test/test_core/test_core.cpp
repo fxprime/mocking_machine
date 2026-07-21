@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 #include "control/IncrementalVelocityController.hpp"
@@ -46,6 +47,26 @@ void test_characterization_dynamics_uses_robust_quantile() {
   TEST_ASSERT_FLOAT_WITHIN(0.1F, 10.0F, estimator.value());
 }
 
+void test_motor_identifier_recovers_first_order_step_model() {
+  characterization::FirstOrderMotorIdentifier identifier;
+  identifier.reset();
+  constexpr float dt_s = 0.01F;
+  constexpr float duty = 0.5F;
+  constexpr float expected_gain = 120.0F;
+  constexpr float expected_time_constant_s = 0.20F;
+  const float a = std::exp(-dt_s / expected_time_constant_s);
+  float velocity = 0.0F;
+  for (uint32_t sample = 0U; sample < 1000U; ++sample) {
+    identifier.update(velocity, duty, dt_s);
+    velocity = a * velocity + expected_gain * (1.0F - a) * duty;
+  }
+  float gain = 0.0F;
+  float time_constant_s = 0.0F;
+  TEST_ASSERT_TRUE(identifier.result(gain, time_constant_s));
+  TEST_ASSERT_FLOAT_WITHIN(0.5F, expected_gain, gain);
+  TEST_ASSERT_FLOAT_WITHIN(0.005F, expected_time_constant_s, time_constant_s);
+}
+
 void test_create_profile_frame_crc_vector() {
   std::array<uint8_t, 8U + 169U> protected_bytes{};
   protected_bytes[0] = 1U;     // Protocol version.
@@ -71,15 +92,27 @@ void test_load_configuration_frame_crc_vector() {
 }
 
 void test_characterization_result_frame_crc_vector() {
-  std::array<uint8_t, 8U + 32U> protected_bytes{};
+  std::array<uint8_t, 8U + 48U> protected_bytes{};
   protected_bytes[0] = 1U;
   protected_bytes[2] = 0x10U;  // CHARACTERIZATION_RESULT 0x0310.
   protected_bytes[3] = 0x03U;
   protected_bytes[4] = 0xBCU;
   protected_bytes[5] = 0x9AU;
-  protected_bytes[6] = 32U;
+  protected_bytes[6] = 48U;
   TEST_ASSERT_EQUAL_HEX16(
-      0xE045U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+      0xEA4BU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
+void test_settings_schema_16_frame_crc_vector() {
+  std::array<uint8_t, 8U + 173U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
+  protected_bytes[3] = 0x01U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 173U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xBA2DU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
 void test_telemetry_rate_respects_uart_bandwidth() {
@@ -90,7 +123,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(13U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(16U, MachineSettings::kSchemaVersion);
 }
 
 void test_incremental_controller_scales_integral_by_time() {
@@ -220,6 +253,84 @@ void test_velocity_estimator_uses_each_control_interval_count_delta() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, estimator.update(1, 7000));
 }
 
+void test_velocity_estimator_predicts_from_characterized_motor_model() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 184;
+  encoder.estimator_min_counts = 4;
+  encoder.estimator_max_window_us = 20000;
+  encoder.estimator_stale_timeout_us = 100000;
+  MotorModelConfiguration model{};
+  model.velocity_gain_forward_rad_s_per_duty = 100.0F;
+  model.velocity_gain_reverse_rad_s_per_duty = 90.0F;
+  model.time_constant_forward_s = 0.10F;
+  model.time_constant_reverse_s = 0.12F;
+  VelocityEstimator estimator;
+  estimator.configure(encoder, 0.025F, model);
+  estimator.reset(0, 1000U);
+  TEST_ASSERT_TRUE(estimator.usingMotorModel());
+  const float predicted = estimator.update(0, 11000U, 0.5F);
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 100.0F * (1.0F - std::exp(-0.1F)) * 0.5F,
+                           predicted);
+}
+
+void test_velocity_estimator_method_zero_ignores_motor_model() {
+  EncoderConfiguration encoder{};
+  MotorModelConfiguration model{};
+  model.velocity_gain_forward_rad_s_per_duty = 100.0F;
+  model.velocity_gain_reverse_rad_s_per_duty = 100.0F;
+  model.time_constant_forward_s = 0.10F;
+  model.time_constant_reverse_s = 0.10F;
+  VelocityEstimator estimator;
+  estimator.configure(encoder, 0.025F, model, VelocityEstimatorMethod::LowPass, 120.0F);
+  estimator.reset(0, 1000U);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
+                          static_cast<uint8_t>(estimator.method()));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, estimator.update(0, 11000U, 0.5F));
+}
+
+void test_velocity_estimator_predicts_from_encoder_window_acceleration() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 100;
+  encoder.estimator_min_counts = 1;
+  encoder.estimator_max_window_us = 100000;
+  encoder.estimator_stale_timeout_us = 100000;
+  VelocityEstimator estimator;
+  estimator.configure(encoder, 0.0F, MotorModelConfiguration{},
+                      VelocityEstimatorMethod::WindowedAccelerationPrediction, 50.0F, 3U);
+  estimator.reset(0, 0U);
+  const float radians_per_count = 6.283185307F / 100.0F;
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, radians_per_count / 0.1F,
+                           estimator.update(1, 100000U, 1.0F));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 1.5F * radians_per_count / 0.1F,
+                           estimator.update(3, 200000U, -1.0F));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 2.0F * radians_per_count / 0.1F,
+                           estimator.update(6, 300000U, 1.0F));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 2.1F * radians_per_count / 0.1F,
+                           estimator.update(6, 310000U, 1.0F));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F,
+                           estimator.update(6, 400000U, 1.0F));
+}
+
+void test_kalman_uses_low_pass_for_hand_motion_only_while_disarmed() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 100;
+  MotorModelConfiguration model{};
+  model.velocity_gain_forward_rad_s_per_duty = 100.0F;
+  model.velocity_gain_reverse_rad_s_per_duty = 100.0F;
+  model.time_constant_forward_s = 0.10F;
+  model.time_constant_reverse_s = 0.10F;
+  VelocityEstimator estimator;
+  estimator.configure(encoder, 0.0F, model, VelocityEstimatorMethod::Kalman, 120.0F, 5U);
+  estimator.reset(0, 0U);
+  const float hand_velocity = (6.283185307F / 100.0F) / 0.1F;
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, hand_velocity,
+                           estimator.update(1, 100000U, 0.0F, true));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, hand_velocity,
+                           estimator.update(2, 200000U, 0.0F, true));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, hand_velocity * std::exp(-0.1F),
+                           estimator.update(2, 210000U, 0.0F, false));
+}
+
 void test_zero_index_debounce_accepts_first_and_filters_close_rises() {
   TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
       100000U, 0U, 5000U, 100, 0, 0U));
@@ -333,7 +444,10 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(13U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(16U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
+                          static_cast<uint8_t>(settings.velocity_estimator_method));
+  TEST_ASSERT_EQUAL_UINT32(5U, settings.velocity_acceleration_window_samples);
   TEST_ASSERT_EQUAL_UINT32(12U, kMaximumLoads);
   TEST_ASSERT_EQUAL_UINT32(EncoderConfiguration::kDefaultZeroIndexMinimumIntervalUs,
                            settings.encoder.zero_index_min_interval_us);
@@ -454,9 +568,11 @@ int main(int, char**) {
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_characterization_dynamics_estimates_constant_acceleration);
   RUN_TEST(test_characterization_dynamics_uses_robust_quantile);
+  RUN_TEST(test_motor_identifier_recovers_first_order_step_model);
   RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
+  RUN_TEST(test_settings_schema_16_frame_crc_vector);
   RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);
@@ -468,6 +584,10 @@ int main(int, char**) {
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
+  RUN_TEST(test_velocity_estimator_predicts_from_characterized_motor_model);
+  RUN_TEST(test_velocity_estimator_method_zero_ignores_motor_model);
+  RUN_TEST(test_velocity_estimator_predicts_from_encoder_window_acceleration);
+  RUN_TEST(test_kalman_uses_low_pass_for_hand_motion_only_while_disarmed);
   RUN_TEST(test_zero_index_debounce_accepts_first_and_filters_close_rises);
   RUN_TEST(test_zero_index_rejects_late_bounce_without_rotor_travel);
   RUN_TEST(test_rotor_phase_tracker_uses_encoder_after_first_zero_reference);

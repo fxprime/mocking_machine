@@ -11,6 +11,7 @@ import { normalizeRotorLoads, slotPosition, synchronizeRotorLoadDraft, ROTOR_SLO
 import { machineStatusKey, shouldRefreshMachineUi } from "./machine-ui-state.mjs";
 import { RunRecorder } from "./run-recorder.mjs";
 import { readBaudPreference, writeBaudPreference } from "./baud-preference.mjs";
+import { CommunicationMetrics } from "./communication-metrics.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -21,6 +22,7 @@ const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
 const deviceSynchronizer = new DeviceSynchronizer();
 const runRecorder = new RunRecorder();
+const communicationMetrics = new CommunicationMetrics();
 
 let port;
 let reader;
@@ -111,8 +113,21 @@ function frame(msgId, payload = new Uint8Array()) {
   return bytes;
 }
 
-async function sendFrame(msgId, payload) { if (writer) await writer.write(frame(msgId, payload)); }
-async function sendAscii(command) { if (writer) await writer.write(encoder.encode(`${command}\n`)); }
+async function sendFrame(msgId, payload) {
+  if (!writer) return;
+  const bytes = frame(msgId, payload);
+  await writer.write(bytes);
+  communicationMetrics.recordTxBytes(bytes.byteLength);
+  communicationMetrics.recordTxMessage();
+}
+
+async function sendAscii(command) {
+  if (!writer) return;
+  const bytes = encoder.encode(`${command}\n`);
+  await writer.write(bytes);
+  communicationMetrics.recordTxBytes(bytes.byteLength);
+  communicationMetrics.recordTxMessage();
+}
 
 async function requestDeviceSynchronization() {
   const now = performance.now();
@@ -156,6 +171,7 @@ async function readLoop() {
     while (connected) {
       const { value, done } = await reader.read();
       if (done) break;
+      communicationMetrics.recordRxBytes(value.byteLength);
       for (const byte of value) rx.push(byte);
       parseRx();
     }
@@ -177,12 +193,13 @@ function parseRx() {
     const header = new DataView(new Uint8Array(rx.slice(0, 10)).buffer);
     const length = header.getUint16(8, true);
     const total = 12 + length;
-    if (length > 512) { rx.shift(); continue; }
+    if (length > 512) { communicationMetrics.recordFramingError(); rx.shift(); continue; }
     if (rx.length < total) return;
     const packet = new Uint8Array(rx.splice(0, total));
     const packetView = new DataView(packet.buffer);
     const expected = packetView.getUint16(10 + length, true);
-    if (crc16(packet.slice(2, 10 + length)) !== expected) continue;
+    if (crc16(packet.slice(2, 10 + length)) !== expected) { communicationMetrics.recordCrcError(); continue; }
+    communicationMetrics.recordRxFrame();
     handleMessage(packetView.getUint16(4, true), new DataView(packet.buffer, 10, length));
   }
 }
@@ -215,7 +232,16 @@ function handleMessage(id, data) {
           : 0.5,
       characterizationDynamicsCutoffHz: data.byteLength >= 135 ? data.getFloat32(131, true) : 20,
       characterizationDynamicsQuantile: data.byteLength >= 139 ? data.getFloat32(135, true) : 0.95,
-      characterizationSafetyFactor: data.byteLength >= 143 ? data.getFloat32(139, true) : 0.70
+      characterizationSafetyFactor: data.byteLength >= 143 ? data.getFloat32(139, true) : 0.70,
+      motorModelGainForward: data.byteLength >= 147 ? data.getFloat32(143, true) : 0,
+      motorModelGainReverse: data.byteLength >= 151 ? data.getFloat32(147, true) : 0,
+      motorModelTimeConstantForward: data.byteLength >= 155 ? data.getFloat32(151, true) : 0,
+      motorModelTimeConstantReverse: data.byteLength >= 159 ? data.getFloat32(155, true) : 0,
+      motorModelVelocityNoise: data.byteLength >= 163 ? data.getFloat32(159, true) : 25,
+      motorModelDisturbanceNoise: data.byteLength >= 167 ? data.getFloat32(163, true) : 100,
+      motorModelEncoderNoiseCounts: data.byteLength >= 171 ? data.getFloat32(167, true) : 0.5,
+      velocityEstimatorMethod: data.byteLength >= 172 ? data.getUint8(171) : 0,
+      velocityAccelerationWindowSamples: data.byteLength >= 173 ? data.getUint8(172) : 5
     };
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
     if (runtimeProfileId === undefined) runtimeProfileId = settings.profileId;
@@ -251,6 +277,7 @@ function handleMessage(id, data) {
   } else if (id === MSG.TELEMETRY) {
     deviceSynchronizer.markTelemetryReceived();
     const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
+    communicationMetrics.recordTelemetry(sample.timestamp, settings.streamRate);
     const recordedSampleCount = runRecorder.samples.length;
     runRecorder.consume(sample);
     if (runRecorder.samples.length !== recordedSampleCount) updateExportButton();
@@ -268,7 +295,11 @@ function handleMessage(id, data) {
       accelerationForward: data.byteLength >= 32 ? data.getFloat32(16, true) : Number.NaN,
       accelerationReverse: data.byteLength >= 32 ? data.getFloat32(20, true) : Number.NaN,
       jerkForward: data.byteLength >= 32 ? data.getFloat32(24, true) : Number.NaN,
-      jerkReverse: data.byteLength >= 32 ? data.getFloat32(28, true) : Number.NaN
+      jerkReverse: data.byteLength >= 32 ? data.getFloat32(28, true) : Number.NaN,
+      modelGainForward: data.byteLength >= 48 ? data.getFloat32(32, true) : Number.NaN,
+      modelGainReverse: data.byteLength >= 48 ? data.getFloat32(36, true) : Number.NaN,
+      modelTimeConstantForward: data.byteLength >= 48 ? data.getFloat32(40, true) : Number.NaN,
+      modelTimeConstantReverse: data.byteLength >= 48 ? data.getFloat32(44, true) : Number.NaN
     };
     renderCharacterizationResult(result);
   } else if (id === MSG.CHARACTERIZATION_STATUS) {
@@ -688,6 +719,8 @@ function handleMessage(id, data) {
 }
 
 function setConnected(value) {
+  communicationMetrics.reset();
+  resetCommunicationDisplay(value);
   $("connectionState").textContent = value ? "● Connected" : "● Disconnected";
   $("connectionState").className = `status-badge ${value ? "online" : "offline"}`;
   $("connectButton").textContent = value ? "Disconnect" : "Connect";
@@ -705,6 +738,60 @@ function setConnected(value) {
   renderRunProfileDialog();
   renderRotorLoadSetup();
   renderEncoderCalibration();
+}
+
+function resetCommunicationDisplay(isConnected) {
+  const stateText = isConnected ? "● Waiting for data" : "● Offline";
+  $("serialLinkState").textContent = stateText;
+  $("serialLinkState").className = "status-badge offline";
+  $("serialDialogState").textContent = stateText;
+  $("serialDialogState").className = "status-badge offline";
+  $("serialRxRate").textContent = "0.00";
+  $("serialDialogRxRate").textContent = "0.00";
+  $("serialRxFrames").textContent = "0.0 valid frames/s";
+  $("serialTxRate").textContent = "0.00";
+  $("serialDialogTxRate").textContent = "0.00";
+  $("serialTxMessages").textContent = "0.0 messages/s";
+  $("serialTelemetryRate").textContent = "0.0";
+  $("serialDialogTelemetryRate").textContent = "0.0";
+  $("serialFrameAge").textContent = "No valid frame received";
+  $("serialDropouts").textContent = "0";
+  $("serialDialogDropouts").textContent = "0";
+  $("serialDropoutPercent").textContent = "0.00% estimated loss";
+  $("serialIntegrityErrors").textContent = "0 CRC · 0 framing errors";
+}
+
+function renderCommunicationMetrics() {
+  if (!connected) return;
+  const metrics = communicationMetrics.snapshot();
+  const rxRate = (metrics.rxBytesPerSecond / 1000).toFixed(2);
+  const txRate = (metrics.txBytesPerSecond / 1000).toFixed(2);
+  const telemetryRate = metrics.telemetryHz.toFixed(1);
+  $("serialRxRate").textContent = rxRate;
+  $("serialDialogRxRate").textContent = rxRate;
+  $("serialRxFrames").textContent = `${metrics.rxFramesPerSecond.toFixed(1)} valid frames/s`;
+  $("serialTxRate").textContent = txRate;
+  $("serialDialogTxRate").textContent = txRate;
+  $("serialTxMessages").textContent = `${metrics.txMessagesPerSecond.toFixed(1)} messages/s`;
+  $("serialTelemetryRate").textContent = telemetryRate;
+  $("serialDialogTelemetryRate").textContent = telemetryRate;
+  $("serialFrameAge").textContent = metrics.lastFrameAgeMs === undefined
+    ? "No valid frame received"
+    : `Last valid frame ${Math.round(metrics.lastFrameAgeMs)} ms ago`;
+  $("serialDropouts").textContent = String(metrics.droppedTelemetry);
+  $("serialDialogDropouts").textContent = String(metrics.droppedTelemetry);
+  $("serialDropoutPercent").textContent = `${metrics.dropoutPercent.toFixed(2)}% estimated loss`;
+  $("serialIntegrityErrors").textContent = `${metrics.crcErrors} CRC · ${metrics.framingErrors} framing errors`;
+
+  const stale = metrics.lastFrameAgeMs !== undefined && metrics.lastFrameAgeMs > 3000;
+  const stateText = metrics.lastFrameAgeMs === undefined
+    ? "● Waiting for data"
+    : stale ? "▲ Data stale" : "● Live";
+  const stateClass = `status-badge ${stale ? "fault" : metrics.lastFrameAgeMs === undefined ? "offline" : "online"}`;
+  $("serialLinkState").textContent = stateText;
+  $("serialLinkState").className = stateClass;
+  $("serialDialogState").textContent = stateText;
+  $("serialDialogState").className = stateClass;
 }
 
 function updateState(state, faults) {
@@ -973,6 +1060,8 @@ const parameterDefinitions = {
   characterizationDynamicsCutoffHz: { id: 33, decimals: 1, step: 0.5, min: 0.5, max: 100, description: "Low-pass cutoff used before calculating characterization acceleration and jerk" },
   characterizationDynamicsQuantile: { id: 34, decimals: 3, step: 0.01, min: 0.80, max: 0.99, description: "Robust quantile used instead of a noise-sensitive single acceleration or jerk peak" },
   characterizationSafetyFactor: { id: 35, decimals: 2, step: 0.05, min: 0.10, max: 1, description: "Multiplier applied to the weaker measured direction when recommending acceleration and jerk limits" },
+  velocityEstimatorMethod: { id: 36, decimals: 0, step: 1, min: 0, max: 2, description: "Velocity estimator: 0 = low-pass, 1 = characterized motor-model Kalman, 2 = encoder-window acceleration prediction" },
+  velocityAccelerationWindowSamples: { id: 37, decimals: 0, step: 1, min: 2, max: 32, description: "Circular velocity-history length used by estimator method 2; larger windows reduce acceleration noise but add lag" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },
@@ -1766,6 +1855,10 @@ function renderCharacterizationResult(result) {
   $("resultAccelerationReverse").textContent = accelerationValid ? formatNumber(result.accelerationReverse, 2) : "—";
   $("resultJerkForward").textContent = jerkValid ? formatNumber(result.jerkForward, 1) : "—";
   $("resultJerkReverse").textContent = jerkValid ? formatNumber(result.jerkReverse, 1) : "—";
+  $("resultModelGainForward").textContent = formatNumber(result.modelGainForward, 2);
+  $("resultModelGainReverse").textContent = formatNumber(result.modelGainReverse, 2);
+  $("resultModelTimeForward").textContent = formatNumber(result.modelTimeConstantForward, 4);
+  $("resultModelTimeReverse").textContent = formatNumber(result.modelTimeConstantReverse, 4);
   $("resultRecommendedAcceleration").textContent = accelerationValid ? formatNumber(recommendedAcceleration, 2) : "—";
   $("resultRecommendedJerk").textContent = jerkValid ? formatNumber(recommendedJerk, 1) : "—";
   const accelerationWouldLower = accelerationValid && recommendedAcceleration < Number(settings.amax);
@@ -2207,6 +2300,7 @@ $("startMotorTest").addEventListener("click", startMotorTest);
 $("stopMotorTest").addEventListener("click", () => stopMotorTest(true));
 $("terminalForm").addEventListener("submit", async event => { event.preventDefault(); const input = $("terminalInput"); if (input.value.trim()) { appendTerminal(`> ${input.value}\n`); await sendAscii(input.value.trim()); input.value = ""; } });
 $("clearTerminal").addEventListener("click", () => { textRx = ""; $("terminalOutput").textContent = ""; });
+$("serialLinkBadge").addEventListener("click", () => $("serialLinkDialog").showModal());
 $("exportButton").addEventListener("click", () => {
   if (!runRecorder.samples.length) return;
   $("exportBaseName").value = defaultExportBaseName();
@@ -2241,3 +2335,5 @@ drawEstimatedStepChart();
 drawPidOutputChart();
 renderRotorLoadSetup();
 renderRunProfileDialog();
+resetCommunicationDisplay(false);
+window.setInterval(renderCommunicationMetrics, 1000);
