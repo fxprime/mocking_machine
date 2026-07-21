@@ -20,7 +20,16 @@ assert.match(indexSource, /src="assets\/modulemore-logo\.png"[^>]*alt="Modulemor
   "Company logo must have a stable asset path and accessible alternative text");
 assert.ok(companyLogo.byteLength > 0, "Company logo asset must be packaged with the web console");
 assert.match(indexSource, /parameterRows[^>]*><tr><td colspan="3">Connect to load firmware parameters/);
+assert.match(indexSource, /id="exportParameters"[^>]*>Export CSV/);
+assert.match(indexSource, /id="importParameters"[^>]*>Import CSV/);
+assert.match(indexSource, /id="parameterCsvFile"[^>]*type="file"[^>]*accept="\.csv,text\/csv"/);
+assert.match(indexSource, /id="parameterImportDialog"[\s\S]*id="parameterImportRows"[\s\S]*id="applyParameterImport"/);
 assert.match(appSource, /Connected; waiting for a valid SETTINGS frame/);
+assert.match(appSource, /createParameterCsv, parseParameterCsv[^\n]*from "\.\/parameter-csv\.mjs"/);
+assert.match(appSource, /parameterImportAction\.entries\[parameterImportAction\.index\][\s\S]*MSG\.SET_PARAMETER[\s\S]*payload\[6\] = 1/,
+  "Parameter import must persist each validated row sequentially");
+assert.match(appSource, /request === MSG\.SET_PARAMETER[\s\S]*parameterImportAction[\s\S]*sendNextParameterImport/,
+  "Parameter import must advance only after each firmware ACK");
 assert.match(appSource, /id === MSG\.HEARTBEAT[\s\S]*requestDeviceSynchronization/,
   "A valid heartbeat must retry configuration synchronization after boot-time command loss");
 assert.match(appSource, /request === MSG\.SELECT_PROFILE[\s\S]*sendFrame\(MSG\.ARM\)/);

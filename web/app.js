@@ -12,6 +12,7 @@ import { machineStatusKey, shouldRefreshMachineUi } from "./machine-ui-state.mjs
 import { RunRecorder } from "./run-recorder.mjs";
 import { readBaudPreference, writeBaudPreference } from "./baud-preference.mjs";
 import { CommunicationMetrics } from "./communication-metrics.mjs";
+import { createParameterCsv, parseParameterCsv } from "./parameter-csv.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -40,6 +41,8 @@ let draggedProfilePoint = -1;
 let profileAction;
 let editingParameterKey;
 let pendingParameterPayload;
+let parameterImportDraft;
+let parameterImportAction;
 let profileTestActive = false;
 let profileTestSawRunning = false;
 let profileTestSamples = [];
@@ -504,6 +507,16 @@ function handleMessage(id, data) {
       }
       return;
     }
+    if (request === MSG.STOP_RUN && parameterImportAction?.stage === "stop") {
+      if (result === 0) {
+        latestState = 0;
+        parameterImportAction.stage = "apply";
+        sendNextParameterImport();
+      } else {
+        failParameterImport(`Could not disarm before import: ${resultDescription(result)}.`);
+      }
+      return;
+    }
     if (request === MSG.STOP_RUN && pendingParameterPayload) {
       if (result === 0) {
         latestState = 0;
@@ -548,6 +561,28 @@ function handleMessage(id, data) {
       return;
     }
     if (request === MSG.SET_PARAMETER) {
+      if (parameterImportAction) {
+        const entry = parameterImportAction.entries[parameterImportAction.index];
+        if (result !== 0) {
+          failParameterImport(`Import stopped at "${entry.parameter}" after ${parameterImportAction.index} saved values: ${resultDescription(result)}.`);
+          return;
+        }
+        ++parameterImportAction.index;
+        $("parameterImportProgress").textContent =
+            `${parameterImportAction.index} of ${parameterImportAction.entries.length} values applied and saved.`;
+        if (parameterImportAction.index >= parameterImportAction.entries.length) {
+          parameterImportAction = undefined;
+          parameterImportDraft = undefined;
+          $("applyParameterImport").disabled = false;
+          $("cancelParameterImport").disabled = false;
+          $("parameterImportDialog").close("apply");
+          toast("Parameter CSV imported and saved.");
+          sendFrame(MSG.GET_SETTINGS);
+        } else {
+          sendNextParameterImport();
+        }
+        return;
+      }
       pendingParameterPayload = undefined;
       if (encoderCalibrationSavePending) {
         encoderCalibrationSavePending = false;
@@ -725,6 +760,8 @@ function setConnected(value) {
   $("connectionState").className = `status-badge ${value ? "online" : "offline"}`;
   $("connectButton").textContent = value ? "Disconnect" : "Connect";
   for (const id of ["stopButton", "armButton", "runButton", "loadGains", "saveConfig", "characterizeButton", "openVinCalibration", "saveDriverDiagnostic", "saveCurrentSense", "startMotorTest", "stopMotorTest", "startTuningTest", "sendTerminal"]) $(id).disabled = !value;
+  $("exportParameters").disabled = !value || !Number.isFinite(Number(settings.schema));
+  $("importParameters").disabled = !value || !Number.isFinite(Number(settings.schema));
   $("saveProfile").disabled = !value;
   $("runProfileTest").disabled = !value;
   renderProfiles();
@@ -733,7 +770,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   updateExportButton();
   renderRunProfileDialog();
   renderRotorLoadSetup();
@@ -1090,6 +1127,69 @@ function renderSettings() {
     const value = formatNumber(settings[key], definition.decimals);
     return `<tr><td><code>${key}</code></td><td><button class="parameter-value${editable ? "" : " readonly"}" data-parameter="${key}" ${editable && connected ? "" : "disabled"}>${value}</button></td><td>${definition.description}</td></tr>`;
   }).join("");
+  const parametersReady = connected && Number.isFinite(Number(settings.schema));
+  $("exportParameters").disabled = !parametersReady;
+  $("importParameters").disabled = !parametersReady || Boolean(parameterImportAction);
+}
+
+function encodeParameterImportEntry(entry) {
+  const payload = new Uint8Array(7);
+  const view = new DataView(payload.buffer);
+  view.setUint16(0, entry.id, true);
+  view.setFloat32(2, entry.value, true);
+  payload[6] = 1;
+  return payload;
+}
+
+function failParameterImport(message) {
+  parameterImportAction = undefined;
+  $("applyParameterImport").disabled = false;
+  $("cancelParameterImport").disabled = false;
+  $("importParameters").disabled = !connected || !Number.isFinite(Number(settings.schema));
+  $("parameterImportProgress").textContent = message;
+  toast(message);
+  if (connected) sendFrame(MSG.GET_SETTINGS);
+}
+
+function sendNextParameterImport() {
+  if (!parameterImportAction || parameterImportAction.stage !== "apply") return;
+  const entry = parameterImportAction.entries[parameterImportAction.index];
+  $("parameterImportProgress").textContent =
+      `Applying ${parameterImportAction.index + 1} of ${parameterImportAction.entries.length}: ${entry.parameter}…`;
+  sendFrame(MSG.SET_PARAMETER, encodeParameterImportEntry(entry)).catch(error => {
+    failParameterImport(`Could not send "${entry.parameter}": ${error.message}`);
+  });
+}
+
+function exportParameterCsv() {
+  if (!connected || !Number.isFinite(Number(settings.schema))) return;
+  downloadCsv(`mocking-machine-parameters-schema-${settings.schema}.csv`,
+              createParameterCsv(settings, parameterDefinitions));
+  toast("Editable machine parameters exported.");
+}
+
+async function reviewParameterCsvFile(file) {
+  if (!file) return;
+  if (file.size > 65536) return toast("Parameter CSV must be 64 KiB or smaller.");
+  try {
+    const imported = parseParameterCsv(await file.text(), parameterDefinitions);
+    parameterImportDraft = imported.filter(entry =>
+      Number(settings[entry.parameter]) !== entry.value);
+    if (!parameterImportDraft.length) return toast("The CSV contains no parameter changes.");
+    $("parameterImportRows").innerHTML = parameterImportDraft.map(entry => {
+      const definition = parameterDefinitions[entry.parameter];
+      return `<tr><td><code>${escapeHtml(entry.parameter)}</code></td><td>${escapeHtml(formatNumber(settings[entry.parameter], definition.decimals))}</td><td>${escapeHtml(formatNumber(entry.value, definition.decimals))}</td></tr>`;
+    }).join("");
+    $("parameterImportSummary").textContent =
+        `${parameterImportDraft.length} changed values from ${file.name} will be validated and saved one at a time.`;
+    $("parameterImportProgress").textContent = "No values have been applied.";
+    $("applyParameterImport").disabled = false;
+    $("cancelParameterImport").disabled = false;
+    $("parameterImportDialog").showModal();
+  } catch (error) {
+    parameterImportDraft = undefined;
+    toast(`Could not load parameter CSV: ${error.message}`);
+  }
 }
 
 function setEncoderCalibrationState(label, appearance) {
@@ -2089,6 +2189,44 @@ $("newProfile").addEventListener("click", openNewProfileEditor);
 $("profileRows").addEventListener("click", event => {
   const button = event.target.closest(".edit-profile");
   if (button) openProfileEditor(Number(button.dataset.profileId));
+});
+$("exportParameters").addEventListener("click", exportParameterCsv);
+$("importParameters").addEventListener("click", () => $("parameterCsvFile").click());
+$("parameterCsvFile").addEventListener("change", async event => {
+  const [file] = event.target.files;
+  await reviewParameterCsvFile(file);
+  event.target.value = "";
+});
+$("parameterImportForm").addEventListener("submit", async event => {
+  if (event.submitter?.value !== "apply") return;
+  event.preventDefault();
+  if (!parameterImportDraft?.length || parameterImportAction) return;
+  const preparation = configurationPreparation(latestState, characterizationRunning, "parameter import");
+  if (preparation.blocked) return toast(preparation.blocked);
+  parameterImportAction = {
+    entries: parameterImportDraft,
+    index: 0,
+    stage: preparation.firstCommand === "stop" ? "stop" : "apply"
+  };
+  $("applyParameterImport").disabled = true;
+  $("cancelParameterImport").disabled = true;
+  $("importParameters").disabled = true;
+  if (parameterImportAction.stage === "stop") {
+    $("parameterImportProgress").textContent = "Stopping and disarming before import…";
+    try {
+      await sendFrame(MSG.STOP_RUN);
+    } catch (error) {
+      failParameterImport(`Could not request disarm: ${error.message}`);
+    }
+  } else {
+    sendNextParameterImport();
+  }
+});
+$("parameterImportDialog").addEventListener("close", () => {
+  if (!parameterImportAction) parameterImportDraft = undefined;
+});
+$("parameterImportDialog").addEventListener("cancel", event => {
+  if (parameterImportAction) event.preventDefault();
 });
 $("parameterRows").addEventListener("click", event => {
   const button = event.target.closest(".parameter-value");

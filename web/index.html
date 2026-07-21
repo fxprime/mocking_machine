@@ -228,7 +228,8 @@
         <button id="saveDriverDiagnostic" disabled>Apply and save diagnostic setting</button>
       </article>
       <article class="panel">
-        <div class="panel-heading"><div><h2>Machine parameters</h2><p>Values shown here are fetched from this firmware.</p></div><button id="saveConfig" disabled>Save current values</button></div>
+        <div class="panel-heading"><div><h2>Machine parameters</h2><p>Values shown here are fetched from this firmware.</p></div><div class="action-row"><button id="exportParameters" disabled>Export CSV</button><button id="importParameters" disabled>Import CSV</button><button id="saveConfig" disabled>Save current values</button></div></div>
+        <input id="parameterCsvFile" type="file" accept=".csv,text/csv" hidden>
         <table><thead><tr><th>Parameter</th><th>Current value</th><th>Description</th></tr></thead><tbody id="parameterRows"><tr><td colspan="3">Connect to load firmware parameters.</td></tr></tbody></table>
       </article>
     </section>
@@ -379,6 +380,15 @@
       </dl>
       <p class="hint">Dropouts are estimated from device timestamp gaps at the configured stream rate. CRC and framing errors are parser totals for the current connection.</p>
       <div class="dialog-actions"><button value="close" class="primary">Close</button></div>
+    </form>
+  </dialog>
+  <dialog id="parameterImportDialog" class="review-dialog">
+    <form method="dialog" id="parameterImportForm">
+      <h2>Review parameter import</h2>
+      <p id="parameterImportSummary">Review values before applying them to the connected machine.</p>
+      <div class="table-scroll"><table><thead><tr><th>Parameter</th><th>Current</th><th>Imported</th></tr></thead><tbody id="parameterImportRows"></tbody></table></div>
+      <p id="parameterImportProgress" class="hint">No values have been applied.</p>
+      <div class="dialog-actions"><button id="cancelParameterImport" value="cancel">Cancel</button><button id="applyParameterImport" value="apply" class="primary">Apply and save</button></div>
     </form>
   </dialog>
   <dialog id="safetyDialog">

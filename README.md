@@ -81,7 +81,7 @@ GUI ไม่ต้องติดตั้ง dependency เพิ่ม ใช
 - **PID tuning** — ทดสอบ profile/manual step, velocity tracking และ estimated step response
 - **Profiles** — สร้าง แก้ไข ตรวจ feasibility เลือก default และทดลองโปรไฟล์
 - **Motor test** — ทดสอบทิศทางและ raw PWM ภายใต้ safety state machine
-- **Parameters** — อ่านและแก้ค่าที่มาจากเฟิร์มแวร์
+- **Parameters** — อ่านและแก้ค่าที่มาจากเฟิร์มแวร์ พร้อม export/import parameter CSV ผ่านหน้าตรวจสอบก่อนบันทึก
 - **Calibration** — สอบเทียบ encoder, VIN, current sense และ characterize มอเตอร์
 - **Terminal** — ส่งคำสั่ง ASCII และดูข้อความ debug
 
