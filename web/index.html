@@ -134,7 +134,7 @@
         <p class="hint">Typing only creates a draft. Apply loads gains into RAM; Save writes the tested values to Preferences.</p>
       </article>
       <article class="panel">
-        <div class="panel-heading"><div><h2>Response test</h2><p>Run a stored velocity profile or a constrained manual velocity step.</p></div><span id="tuningTestState" class="status-badge offline">● Ready</span></div>
+        <div class="panel-heading"><div><h2>Response test</h2><p>Run a stored profile, one manual step, or a repeated randomized step sequence.</p></div><span id="tuningTestState" class="status-badge offline">● Ready</span></div>
         <fieldset>
           <legend>Test input</legend>
           <label class="radio-option"><input type="radio" name="tuningTestMode" value="profile" aria-controls="tuningProfileControls" checked> Stored profile</label>
@@ -144,8 +144,17 @@
           <label>Profile <select id="tuningProfileSelect"></select></label>
         </div>
         <div id="tuningManualControls" class="form-grid tuning-source-controls" hidden>
-          <label>Target velocity (rad/s) <input id="tuningManualVelocity" type="number" min="0.1" step="0.1" value="20"></label>
-          <label>Run time (s) <input id="tuningManualDuration" type="number" min="0.1" max="3600" step="0.1" value="5"></label>
+          <label>Pattern <select id="tuningManualPattern"><option value="random" selected>Repeated random steps</option><option value="single">Single step</option></select></label>
+          <label class="manual-single-option" hidden>Target velocity (rad/s) <input id="tuningManualVelocity" type="number" min="0.1" step="0.1" value="20"></label>
+          <label class="manual-single-option" hidden>Run time (s) <input id="tuningManualDuration" type="number" min="0.1" max="3600" step="0.1" value="5"></label>
+          <label class="manual-random-option">Minimum velocity (rad/s) <input id="tuningRandomMinimum" type="number" min="0.1" step="0.1" value="5"></label>
+          <label class="manual-random-option">Maximum velocity (rad/s) <input id="tuningRandomMaximum" type="number" min="0.1" step="0.1" value="25"></label>
+          <label class="manual-random-option">Number of steps <input id="tuningRandomLevels" type="number" min="2" max="16" step="1" value="10"></label>
+          <label class="manual-random-option">Hold each level (s) <input id="tuningRandomHold" type="number" min="0.1" max="360" step="0.1" value="1"></label>
+          <div class="manual-random-option sequence-preview">
+            <button id="randomizeTuningSequence" type="button">New random sequence</button>
+            <p id="tuningSequencePreview" class="notice" aria-live="polite"></p>
+          </div>
         </div>
         <div class="action-row"><button id="startTuningTest" class="danger" disabled>Run response test</button><button id="stopTuningTest" disabled>Stop and disarm</button></div>
       </article>

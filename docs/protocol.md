@@ -108,12 +108,13 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 
 | ID | Name | Direction | Bytes | Description |
 |---:|---|---|---:|---|
-| `0x0200` | [START_RUN](#runtime-control-messages-0x0200-0x0205) | Host → device | 0 | Run the selected profile |
-| `0x0201` | [STOP_RUN](#runtime-control-messages-0x0200-0x0205) | Host → device | 0 | Stop and disarm |
+| `0x0200` | [START_RUN](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Run the selected profile |
+| `0x0201` | [STOP_RUN](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Stop and disarm |
 | `0x0202` | [MOTOR_TEST](#motor_test-0x0202) | Host → device | 4 | Apply raw signed duty |
-| `0x0203` | [CLEAR_FAULTS](#runtime-control-messages-0x0200-0x0205) | Host → device | 0 | Clear and recheck operational faults |
-| `0x0204` | [ARM](#runtime-control-messages-0x0200-0x0205) | Host → device | 0 | Enter armed state after safety checks |
+| `0x0203` | [CLEAR_FAULTS](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Clear and recheck operational faults |
+| `0x0204` | [ARM](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Enter armed state after safety checks |
 | `0x0205` | [START_VELOCITY_TEST](#start_velocity_test-0x0205) | Host → device | 8 | Run a temporary constrained step |
+| `0x0206` | [START_VELOCITY_SEQUENCE](#start_velocity_sequence-0x0206) | Host → device | 72 | Run a bounded temporary velocity-level sequence |
 | `0x0210` | [START_STREAM](#stream-control-messages-0x0210-0x0211) | Host → device | 0 | Synchronize state and enable telemetry |
 | `0x0211` | [STOP_STREAM](#stream-control-messages-0x0210-0x0211) | Host → device | 0 | Disable telemetry |
 | `0x0220` | [TELEMETRY](#telemetry-0x0220) | Device → host | 84 | Machine measurement sample |
@@ -314,14 +315,15 @@ Both commands are accepted only while disarmed. `SET_PROFILE` requires an existi
 
 Slots must be unique. `SET_LOAD_CONFIGURATION` persists the complete configuration and is accepted only while disarmed.
 
-### Runtime control messages (0x0200-0x0205)
+### Runtime control messages (0x0200-0x0206)
 
 - `ARM` performs all safety checks. Hosts must wait for a successful ACK before starting motion.
 - `START_RUN` runs the current runtime profile and requires the armed state.
 - `STOP_RUN` stops output and disarms.
 - `CLEAR_FAULTS` stops and disarms, clears latched operational faults, then re-samples VIN and enabled EN/DIAG protection. Initialization faults require a successful reboot.
 
-These messages have empty payloads except `MOTOR_TEST` and `START_VELOCITY_TEST` below.
+These messages have empty payloads except `MOTOR_TEST`, `START_VELOCITY_TEST`, and
+`START_VELOCITY_SEQUENCE` below.
 
 ### MOTOR_TEST (0x0202)
 
@@ -341,6 +343,25 @@ Starts a temporary constrained velocity step after a successful `ARM`.
 | 4 | `duration_ms` | `u32` | ms | Test duration |
 
 Configured velocity, acceleration, and jerk limits remain active.
+
+### START_VELOCITY_SEQUENCE (0x0206)
+
+Starts one continuously recorded series of constrained velocity levels after a successful
+`ARM`. The browser generates and previews the complete sequence before confirmation. This
+command is temporary and does not modify stored profiles or settings.
+
+| Offset | Field name | Type | Units / values | Description |
+|---:|---|---|---|---|
+| 0 | `hold_ms` | `u32` | ≥100 ms | Time assigned to every level |
+| 4 | `level_count` | `u8` | 1–16 | Number of valid velocity entries |
+| 5 | `reserved` | `u8[3]` | zero | Reserved for future use |
+| 8 | `levels_rad_s` | `f32[16]` | rad/s | Fixed-capacity velocity array; unused entries are zero |
+
+Every valid level must be finite, greater than zero, and no greater than the configured
+maximum velocity. `hold_ms × level_count` must not exceed 3,600,000 ms. After the final
+level, the normal acceleration and jerk limiter returns the target to zero before the
+machine stops and disarms. The payload is fixed at 72 bytes and remains covered by the
+normal frame CRC.
 
 ### Stream control messages (0x0210, 0x0211)
 

@@ -94,7 +94,10 @@ function pidReviewNoiseSpectrum(length, sampleRateHz, cutoffHz, factor) {
     ...singleSided,
     ...singleSided.slice(1, realLength - 1).reverse()
   ];
-  return doubleSided.map(value => (1 - value + 1e-9) * 10 * factor);
+  // PIDReview inverts the shaped spectrum before adding it to Pxx. Keep the
+  // user factor outside that reciprocal so larger values still mean stronger
+  // regularization and a factor of 1 matches PIDReview's nominal spectrum.
+  return doubleSided.map(value => factor / ((1 - value + 1e-9) * 10));
 }
 
 export function estimateClosedLoopStepResponse(samples, options = {}) {

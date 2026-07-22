@@ -13,11 +13,12 @@ import { RunRecorder } from "./run-recorder.mjs";
 import { readBaudPreference, writeBaudPreference } from "./baud-preference.mjs";
 import { CommunicationMetrics } from "./communication-metrics.mjs";
 import { createParameterCsv, parseParameterCsv } from "./parameter-csv.mjs";
+import { createVelocityStepSequence, encodeVelocityStepSequence } from "./velocity-step-sequence.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
@@ -57,6 +58,8 @@ let tuningTestSawRunning = false;
 let tuningSamples = [];
 let tuningTestMode = "profile";
 let tuningTargetVelocity = 0;
+let tuningVelocitySequence;
+let tuningVelocitySequenceSeed;
 let stepEstimate;
 let latestState = 0;
 let latestFaults = 0;
@@ -317,7 +320,8 @@ function handleMessage(id, data) {
   } else if (id === MSG.ACK) {
     const request = data.getUint16(0, true);
     const result = data.getUint8(2);
-    if (result === 0 && (request === MSG.START_RUN || request === MSG.START_VELOCITY_TEST)) {
+    if (result === 0 && (request === MSG.START_RUN || request === MSG.START_VELOCITY_TEST ||
+                         request === MSG.START_VELOCITY_SEQUENCE)) {
       runRecorder.begin();
       recordedLoadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
       recordedLoadSettingId = Number(settings.loadSetting) || 0;
@@ -707,6 +711,9 @@ function handleMessage(id, data) {
         tuningAction.stage = "start";
         if (tuningAction.mode === "profile") {
           sendFrame(MSG.START_RUN);
+        } else if (tuningAction.pattern === "random") {
+          sendFrame(MSG.START_VELOCITY_SEQUENCE,
+                    encodeVelocityStepSequence(tuningAction.sequence));
         } else {
           const payload = new Uint8Array(8), view = new DataView(payload.buffer);
           view.setFloat32(0, tuningAction.velocity, true);
@@ -746,6 +753,10 @@ function handleMessage(id, data) {
       return;
     }
     if (request === MSG.START_VELOCITY_TEST && tuningAction?.stage === "start") {
+      confirmTuningRun(result);
+      return;
+    }
+    if (request === MSG.START_VELOCITY_SEQUENCE && tuningAction?.stage === "start") {
       confirmTuningRun(result);
       return;
     }
@@ -982,8 +993,10 @@ function failTuningAction(message) {
 
 function confirmTuningRun(result) {
   if (result !== 0) return failTuningAction(`Test did not start: ${resultDescription(result)}.`);
-  tuningTestMode = tuningAction.mode;
-  tuningTargetVelocity = tuningAction.mode === "manual" ? tuningAction.velocity : 0;
+  tuningTestMode = tuningAction.pattern === "random" ? "manual-sequence" : tuningAction.mode;
+  tuningTargetVelocity = tuningAction.mode === "manual" && tuningAction.pattern !== "random"
+    ? tuningAction.velocity
+    : 0;
   tuningAction = undefined;
   tuningTestActive = true; tuningTestSawRunning = false; tuningSamples = [];
   clearStepEstimate("Test running; the estimate will be calculated after capture completes.");
@@ -1001,7 +1014,9 @@ function renderTuningTelemetry(sample) {
     tuningTestSawRunning = true;
     tuningSamples.push({ timestamp: sample.timestamp, desired: sample.desired, measured: sample.measured, output: sample.output, pTerm: sample.pTerm, iTerm: sample.iTerm, dTerm: sample.dTerm });
     if (tuningSamples.length > 12000) tuningSamples.shift();
-    setTuningTestStatus("● Running", `Capturing ${tuningTestMode === "manual" ? "manual step" : "profile"} response…`, "online");
+    const source = tuningTestMode === "manual" ? "manual step" :
+      tuningTestMode === "manual-sequence" ? "random step sequence" : "profile";
+    setTuningTestStatus("● Running", `Capturing ${source} response…`, "online");
   } else if (tuningTestSawRunning) {
     tuningTestActive = false;
     $("startTuningTest").disabled = !connected;
@@ -1027,7 +1042,10 @@ function finalizeTuningResponse(faulted = false) {
   $("tuningPeakVelocity").textContent = formatNumber(peak, 2);
   if (tuningTestMode !== "manual" || !(tuningTargetVelocity > 0)) {
     $("tuningOvershoot").textContent = "—"; $("tuningRiseTime").textContent = "—"; $("tuningSettlingTime").textContent = "—";
-    setTuningTestStatus(faulted ? "▲ Fault" : "✓ Complete", faulted ? "Profile response ended with a firmware fault." : "Profile response captured. Step metrics apply only to manual tests.", faulted ? "fault" : "online");
+    const completeMessage = tuningTestMode === "manual-sequence"
+      ? "Random step sequence captured; review tracking and the frequency-domain estimate."
+      : "Profile response captured. Step metrics apply only to single manual steps.";
+    setTuningTestStatus(faulted ? "▲ Fault" : "✓ Complete", faulted ? "Response ended with a firmware fault." : completeMessage, faulted ? "fault" : "online");
     return;
   }
   const metrics = calculateStepMetrics(tuningSamples, tuningTargetVelocity);
@@ -1117,7 +1135,15 @@ function renderSettings() {
   $("currentSenseEnabled").checked = settings.currentSenseEnabled;
   const maximumDuty = Math.max(0.01, Number(settings.maxDuty) || 0.9);
   $("tuningManualVelocity").max = formatNumber(settings.vmax, 2);
+  $("tuningRandomMinimum").max = formatNumber(settings.vmax, 2);
+  $("tuningRandomMaximum").max = formatNumber(settings.vmax, 2);
   if (Number($("tuningManualVelocity").value) > settings.vmax) $("tuningManualVelocity").value = formatNumber(settings.vmax, 2);
+  const randomMaximum = Math.min(Number($("tuningRandomMaximum").value), settings.vmax);
+  $("tuningRandomMaximum").value = formatNumber(randomMaximum, 2);
+  if (Number($("tuningRandomMinimum").value) >= randomMaximum) {
+    $("tuningRandomMinimum").value = formatNumber(Math.max(0.1, randomMaximum * 0.25), 2);
+  }
+  refreshTuningVelocitySequence();
   $("motorTestDutyRange").max = maximumDuty.toFixed(2);
   $("motorTestDuty").max = maximumDuty.toFixed(2);
   if (Number($("motorTestDuty").value) > maximumDuty) setMotorTestDuty(maximumDuty);
@@ -1742,10 +1768,19 @@ async function startTuningResponseTest() {
     action.profileId = Number($("tuningProfileSelect").value);
     if (!profiles.some(profile => profile.id === action.profileId)) return toast("Select a valid stored profile.");
   } else {
-    action.velocity = Number($("tuningManualVelocity").value);
-    action.duration = Number($("tuningManualDuration").value);
-    if (!(action.velocity > 0 && action.velocity <= Number(settings.vmax))) return toast(`Manual velocity must be between 0 and ${formatNumber(settings.vmax, 2)} rad/s.`);
-    if (!(action.duration >= 0.1 && action.duration <= 3600)) return toast("Test duration must be between 0.1 and 3600 seconds.");
+    action.pattern = $("tuningManualPattern").value;
+    if (action.pattern === "random") {
+      try {
+        action.sequence = refreshTuningVelocitySequence();
+      } catch (error) {
+        return toast(error.message);
+      }
+    } else {
+      action.velocity = Number($("tuningManualVelocity").value);
+      action.duration = Number($("tuningManualDuration").value);
+      if (!(action.velocity > 0 && action.velocity <= Number(settings.vmax))) return toast(`Manual velocity must be between 0 and ${formatNumber(settings.vmax, 2)} rad/s.`);
+      if (!(action.duration >= 0.1 && action.duration <= 3600)) return toast("Test duration must be between 0.1 and 3600 seconds.");
+    }
   }
   if (!await confirmSafety("The response test will rotate the machine using the currently applied controller gains. Verify the load, close the guard, and keep the emergency stop accessible.")) return;
   tuningAction = action;
@@ -2390,10 +2425,57 @@ function renderTuningTestInputMode(mode) {
   profileControls.hidden = mode !== "profile";
   manualControls.hidden = mode !== "manual";
 }
+
+function randomSequenceSeed() {
+  if (!globalThis.crypto?.getRandomValues) {
+    return (Date.now() ^ Math.floor(performance.now() * 1000)) >>> 0;
+  }
+  const values = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(values);
+  return values[0];
+}
+
+function refreshTuningVelocitySequence(newSeed = false) {
+  if (newSeed || tuningVelocitySequenceSeed === undefined) {
+    tuningVelocitySequenceSeed = randomSequenceSeed();
+  }
+  tuningVelocitySequence = createVelocityStepSequence({
+    minimumVelocity: $("tuningRandomMinimum").value,
+    maximumVelocity: $("tuningRandomMaximum").value,
+    levelCount: Number($("tuningRandomLevels").value),
+    holdSeconds: $("tuningRandomHold").value,
+    velocityLimit: Number(settings.vmax) || 150,
+    seed: tuningVelocitySequenceSeed
+  });
+  $("tuningSequencePreview").textContent =
+    `${tuningVelocitySequence.durationSeconds.toFixed(1)} s · ` +
+    tuningVelocitySequence.levels.map(value => formatNumber(value, 1)).join(" → ") +
+    " rad/s";
+  return tuningVelocitySequence;
+}
+
+function renderManualPattern() {
+  const random = $("tuningManualPattern").value === "random";
+  document.querySelectorAll(".manual-single-option").forEach(node => { node.hidden = random; });
+  document.querySelectorAll(".manual-random-option").forEach(node => { node.hidden = !random; });
+  if (random) {
+    try { refreshTuningVelocitySequence(); } catch (error) { $("tuningSequencePreview").textContent = error.message; }
+  }
+}
 document.querySelectorAll('input[name="tuningTestMode"]').forEach(input => input.addEventListener("change", () => {
   if (input.checked) renderTuningTestInputMode(input.value);
 }));
 renderTuningTestInputMode(document.querySelector('input[name="tuningTestMode"]:checked').value);
+$("tuningManualPattern").addEventListener("change", renderManualPattern);
+for (const id of ["tuningRandomMinimum", "tuningRandomMaximum", "tuningRandomLevels", "tuningRandomHold"]) {
+  $(id).addEventListener("change", () => {
+    try { refreshTuningVelocitySequence(); } catch (error) { $("tuningSequencePreview").textContent = error.message; }
+  });
+}
+$("randomizeTuningSequence").addEventListener("click", () => {
+  try { refreshTuningVelocitySequence(true); } catch (error) { $("tuningSequencePreview").textContent = error.message; }
+});
+renderManualPattern();
 $("startTuningTest").addEventListener("click", startTuningResponseTest);
 $("stopTuningTest").addEventListener("click", () => sendFrame(MSG.STOP_RUN));
 for (const id of ["stepFftWindow", "stepResponseDuration", "stepRegularization", "stepCutoffHz", "stepMinimumExcitation"]) $(id).addEventListener("change", updateStepEstimate);

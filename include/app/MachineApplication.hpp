@@ -17,6 +17,7 @@
 #include "drivers/Vnh2sp30MotorDriver.hpp"
 #include "drivers/ZeroIndexSensor.hpp"
 #include "profile/VelocityProfile.hpp"
+#include "profile/VelocityStepSequence.hpp"
 #include "protocol/SerialLink.hpp"
 #include "storage/SettingsStore.hpp"
 
@@ -97,6 +98,7 @@ class MachineApplication final {
   LowPassFilter current_filter_{};
   VelocityProfile profile_{};
   VelocityProfileConfiguration tuning_profile_{};
+  VelocityStepSequence velocity_step_sequence_{};
   protocol::SerialLink serial_link_{};
   TelemetrySample telemetry_{};
   RunState state_ = RunState::Disarmed;

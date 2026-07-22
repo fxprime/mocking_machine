@@ -38,6 +38,30 @@ assert.ok(estimate.response.length >= 49 && estimate.response.length <= 51);
 assert.ok(estimate.response[0].value > 0.04 && estimate.response[0].value < 0.2);
 assert.ok(estimate.response.at(-1).value > 0.85 && estimate.response.at(-1).value < 1.1);
 
+// PIDReview's nominal regularization must not make the identified DC gain depend on
+// the commanded velocity amplitude. A well-tracking 1 rad/s signal should still
+// settle near unity with the same default noise factor used by the UI.
+const lowAmplitudeInput = deterministicExcitation(2048);
+let lowAmplitudeOutput = 0;
+const lowAmplitudeSamples = lowAmplitudeInput.map((desired, index) => {
+  lowAmplitudeOutput += 0.18 * (desired - lowAmplitudeOutput);
+  return {
+    timestamp: index * 1e6 / sampleRateHz,
+    desired,
+    measured: lowAmplitudeOutput
+  };
+});
+const nominalEstimate = estimateClosedLoopStepResponse(lowAmplitudeSamples, {
+  windowSize: 256,
+  responseDurationSeconds: 0.5,
+  cutoffHz: 25,
+  regularization: 1,
+  minimumInputAmplitude: 0.35
+});
+assert.equal(nominalEstimate.ok, true, nominalEstimate.message);
+assert.ok(nominalEstimate.response.at(-1).value > 0.85,
+  `nominal estimate settled at ${nominalEstimate.response.at(-1).value}`);
+
 const insufficient = estimateClosedLoopStepResponse(samples.slice(0, 20), { windowSize: 64 });
 assert.equal(insufficient.ok, false);
 assert.match(insufficient.message, /samples|window/i);

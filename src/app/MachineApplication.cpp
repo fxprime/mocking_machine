@@ -123,6 +123,13 @@ struct VelocityTestPayload {
   uint32_t duration_ms;
 };
 
+struct VelocitySequencePayload {
+  uint32_t hold_ms;
+  uint8_t level_count;
+  uint8_t reserved[3];
+  float levels_rad_s[kMaximumVelocityTestLevels];
+};
+
 struct DriverDiagnosticPayload {
   uint8_t enabled;
 };
@@ -294,6 +301,8 @@ static_assert(sizeof(CharacterizationStatusPayload) == 10U,
 static_assert(sizeof(ParameterPayload) == 7U, "Parameter payload layout changed");
 static_assert(sizeof(ProfilePayload) == 168U, "Profile payload layout changed");
 static_assert(sizeof(SetProfilePayload) == 169U, "Set profile payload layout changed");
+static_assert(sizeof(VelocitySequencePayload) == 72U,
+              "Update protocol and browser velocity-sequence encoder");
 static_assert(sizeof(LoadEntryPayload) == 7U, "Load entry payload layout changed");
 static_assert(sizeof(LoadConfigurationPayload) == 86U,
               "Load configuration payload layout changed");
@@ -476,7 +485,10 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
     telemetry_.desired_velocity_rad_s = 0.0F;
     telemetry_.controller_output = motor_.appliedDuty();
   } else if (state_ == RunState::Running && faults_ == FaultNone) {
-    const float raw_target = profile_.target(scheduled_us);
+    const bool sequence_active = velocity_step_sequence_.active();
+    const float raw_target = sequence_active
+                                 ? velocity_step_sequence_.target(scheduled_us)
+                                 : profile_.target(scheduled_us);
     telemetry_.desired_velocity_rad_s = motion_limiter_.update(raw_target, dt_s);
     if (telemetry_.desired_velocity_rad_s > 0.0F) {
       telemetry_.controller_output = controller_.update(
@@ -490,8 +502,11 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
       telemetry_.controller_output = 0.0F;
       motor_.stop();
     }
-    if (!profile_.active() ||
-        (profile_.finished(scheduled_us) && motion_limiter_.velocity() == 0.0F)) {
+    const bool source_finished = sequence_active
+                                     ? velocity_step_sequence_.finished(scheduled_us)
+                                     : profile_.finished(scheduled_us);
+    if ((!sequence_active && !profile_.active()) ||
+        (source_finished && motion_limiter_.velocity() == 0.0F)) {
       transitionToStopped();
     }
   } else if (state_ == RunState::Armed && manual_command_expiry_us_ > scheduled_us) {
@@ -511,7 +526,7 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   }
 
   telemetry_.faults = faults_;
-  telemetry_.profile_id = profile_.id();
+  telemetry_.profile_id = velocity_step_sequence_.active() ? UINT16_MAX : profile_.id();
   telemetry_.load_setting_id = settings_.load_setting.setting_id;
   telemetry_.state = state_;
 }
@@ -551,6 +566,7 @@ void MachineApplication::updateSafety(const uint64_t timestamp_us, const float c
 
 void MachineApplication::transitionToStopped() {
   profile_.stop();
+  velocity_step_sequence_.stop();
   controller_.reset();
   motion_limiter_.reset();
   encoder_watchdog_.reset();
@@ -1249,6 +1265,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
         return;
       }
       const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+      velocity_step_sequence_.stop();
       profile_.select(selected, now);
       motion_limiter_.reset();
       controller_.reset();
@@ -1279,7 +1296,46 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       std::strncpy(tuning_profile_.name, "manual-step", sizeof(tuning_profile_.name) - 1U);
       tuning_profile_.target_velocity_rad_s = test.target_velocity_rad_s;
       tuning_profile_.duration_ms = test.duration_ms;
+      velocity_step_sequence_.stop();
       profile_.select(&tuning_profile_, static_cast<uint64_t>(esp_timer_get_time()));
+      motion_limiter_.reset();
+      controller_.reset();
+      state_ = RunState::Running;
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      return;
+    }
+    case MessageId::StartVelocitySequence: {
+      if (frame.payload_size != sizeof(VelocitySequencePayload) ||
+          state_ != RunState::Armed || faults_ != FaultNone ||
+          characterization_stage_ != CharacterizationStage::Idle) {
+        sendAck(frame.sequence, frame.message_id,
+                frame.payload_size != sizeof(VelocitySequencePayload)
+                    ? ResultCode::InvalidLength
+                    : ResultCode::UnsafeState);
+        return;
+      }
+      VelocitySequencePayload test{};
+      std::memcpy(&test, frame.payload, sizeof(test));
+      const uint64_t duration_ms =
+          static_cast<uint64_t>(test.hold_ms) * test.level_count;
+      bool valid = test.level_count >= 1U &&
+                   test.level_count <= kMaximumVelocityTestLevels &&
+                   test.hold_ms >= 100U && duration_ms <= 3600000ULL;
+      std::array<float, kMaximumVelocityTestLevels> levels{};
+      for (size_t index = 0U; valid && index < test.level_count; ++index) {
+        const float level = test.levels_rad_s[index];
+        valid = std::isfinite(level) && level > 0.0F &&
+                level <= settings_.safety.max_velocity_rad_s;
+        levels[index] = level;
+      }
+      if (!valid) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      profile_.stop();
+      velocity_step_sequence_.start(
+          levels, test.level_count, test.hold_ms,
+          static_cast<uint64_t>(esp_timer_get_time()));
       motion_limiter_.reset();
       controller_.reset();
       state_ = RunState::Running;

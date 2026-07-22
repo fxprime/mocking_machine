@@ -169,6 +169,14 @@ assert.match(indexSource, /id="tuningManualControls"[^>]*\shidden(?:\s|>)/,
   "Manual response-test inputs must start hidden while Stored profile is selected");
 assert.match(appSource, /function renderTuningTestInputMode[\s\S]*profileControls\.hidden = mode !== "profile"[\s\S]*manualControls\.hidden = mode !== "manual"/,
   "Response-test mode must exclusively reveal its matching input controls");
+assert.match(indexSource, /id="tuningManualPattern"[\s\S]*Repeated random steps[\s\S]*id="tuningRandomLevels"[\s\S]*id="tuningSequencePreview"/,
+  "Manual response testing must expose a previewable repeated random sequence");
+assert.match(appSource, /START_VELOCITY_SEQUENCE:\s*0x0206/,
+  "Repeated manual steps must use their dedicated bounded protocol command");
+assert.match(appSource, /encodeVelocityStepSequence\(tuningAction\.sequence\)/,
+  "The exact previewed velocity sequence must be sent after arming");
+assert.match(firmwareSource, /static_assert\(sizeof\(VelocitySequencePayload\) == 72U/,
+  "Firmware must preserve the bounded velocity-sequence payload");
 assert.doesNotMatch(indexSource, /id="currentCalibrationDialog"/);
 assert.doesNotMatch(indexSource, /id="motorTestCalibrateCurrent"/);
 assert.match(appSource, /CURRENT_CALIBRATION_STATUS:\s*0x0302/);

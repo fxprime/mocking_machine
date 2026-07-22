@@ -15,6 +15,7 @@
 #include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "profile/VelocityProfile.hpp"
+#include "profile/VelocityStepSequence.hpp"
 #include "profile/ProfileCollection.hpp"
 #include "protocol/Crc16.hpp"
 #include "protocol/SerialBandwidth.hpp"
@@ -113,6 +114,35 @@ void test_settings_schema_16_frame_crc_vector() {
   protected_bytes[6] = 173U;
   TEST_ASSERT_EQUAL_HEX16(
       0xBA2DU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
+void test_velocity_step_sequence_holds_each_level_and_finishes_at_zero() {
+  VelocityStepSequence sequence;
+  std::array<float, kMaximumVelocityTestLevels> levels{};
+  levels[0] = 5.0F;
+  levels[1] = 18.0F;
+  levels[2] = 9.0F;
+  sequence.start(levels, 3U, 500U, 1000000ULL);
+
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, sequence.target(999999ULL));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 5.0F, sequence.target(1000000ULL));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 5.0F, sequence.target(1499999ULL));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 18.0F, sequence.target(1500000ULL));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 9.0F, sequence.target(2499999ULL));
+  TEST_ASSERT_TRUE(sequence.finished(2500000ULL));
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, sequence.target(2500000ULL));
+}
+
+void test_velocity_sequence_frame_crc_vector() {
+  std::array<uint8_t, 8U + 72U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x06U;  // START_VELOCITY_SEQUENCE 0x0206.
+  protected_bytes[3] = 0x02U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 72U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xEC74U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
 void test_telemetry_rate_respects_uart_bandwidth() {
@@ -573,6 +603,8 @@ int main(int, char**) {
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
   RUN_TEST(test_settings_schema_16_frame_crc_vector);
+  RUN_TEST(test_velocity_step_sequence_holds_each_level_and_finishes_at_zero);
+  RUN_TEST(test_velocity_sequence_frame_crc_vector);
   RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
   RUN_TEST(test_incremental_controller_scales_integral_by_time);
   RUN_TEST(test_incremental_controller_does_not_wind_up);

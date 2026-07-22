@@ -38,6 +38,7 @@ enum class MessageId : uint16_t {
   ClearFaults = 0x0203,
   Arm = 0x0204,
   StartVelocityTest = 0x0205,
+  StartVelocitySequence = 0x0206,
   StartStream = 0x0210,
   StopStream = 0x0211,
   Telemetry = 0x0220,
