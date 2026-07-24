@@ -938,6 +938,7 @@ function renderTelemetry(sample) {
   $("measuredVelocity").textContent = sample.measured.toFixed(1);
   $("motorCurrent").textContent = sample.current.toFixed(2);
   $("supplyVoltage").textContent = sample.supplyVoltage.toFixed(2);
+  drawOverviewSparklines();
   $("calibrationSupplyVoltage").textContent = sample.supplyVoltage.toFixed(3);
   $("currentDialogMeasured").textContent = sample.current.toFixed(3);
   const rotorReferenced = sample.zeroSequence > 0 || sample.zeroTime > 0;
@@ -964,6 +965,74 @@ function renderTelemetry(sample) {
   renderEncoderCalibration();
   renderRotorZeroCalibration();
   updateState(sample.state, sample.faults);
+}
+
+function drawOverviewSparklines() {
+  drawTelemetrySparkline("motorCurrentGraph", "current", "Motor current", "amperes", true);
+  drawTelemetrySparkline("driverVinGraph", "supplyVoltage", "Driver VIN", "volts", false);
+}
+
+function drawTelemetrySparkline(canvasId, sampleKey, label, unit, includeZero) {
+  const canvas = $(canvasId);
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, width, height);
+  const sampleCount = Math.max(30, Math.min(300, (settings.streamRate || 50) * 4));
+  const recent = samples.slice(-sampleCount).filter(
+      sample => Number.isFinite(sample[sampleKey]));
+  if (recent.length < 2) {
+    canvas.setAttribute("aria-label", `${label} history is waiting for telemetry`);
+    return;
+  }
+
+  const values = recent.map(sample => sample[sampleKey]);
+  const observedMinimum = Math.min(...values);
+  const observedMaximum = Math.max(...values);
+  const observedSpan = observedMaximum - observedMinimum;
+  const paddedSpan = Math.max(0.1, observedSpan * 1.2);
+  const minimum = includeZero
+      ? Math.min(0, observedMinimum)
+      : (observedMinimum + observedMaximum - paddedSpan) * 0.5;
+  const maximum = includeZero
+      ? Math.max(0.1, observedMaximum)
+      : minimum + paddedSpan;
+  const span = Math.max(0.1, maximum - minimum);
+  const style = getComputedStyle(document.documentElement);
+  const yFor = value => height - ((value - minimum) / span) * height;
+
+  context.strokeStyle = style.getPropertyValue("--outline").trim();
+  context.lineWidth = dpr;
+  context.beginPath();
+  context.moveTo(0, yFor(0));
+  context.lineTo(width, yFor(0));
+  context.stroke();
+
+  context.strokeStyle = style.getPropertyValue("--measured").trim();
+  context.lineWidth = 1.5 * dpr;
+  context.lineJoin = "round";
+  context.lineCap = "round";
+  context.beginPath();
+  recent.forEach((sample, index) => {
+    const x = index * width / (recent.length - 1);
+    const y = yFor(sample[sampleKey]);
+    if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+  });
+  context.stroke();
+
+  canvas.setAttribute(
+      "aria-label",
+      `${label} history. Latest ${values.at(-1).toFixed(2)} ${unit}; ` +
+      `observed range ${observedMinimum.toFixed(2)} to ` +
+      `${observedMaximum.toFixed(2)} ${unit}.`);
 }
 
 function setProfileTestStatus(label, detail, appearance) {

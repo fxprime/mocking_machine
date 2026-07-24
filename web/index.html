@@ -53,10 +53,20 @@
       <div class="overview-status-layout">
         <div class="metric-grid overview-metrics">
           <article class="metric"><span>Machine state</span><strong id="machineState">DISCONNECTED</strong></article>
-          <article class="metric"><span>Driver VIN</span><strong><b id="supplyVoltage">0.00</b> V</strong></article>
+          <article class="metric driver-vin-metric">
+            <span>Driver VIN</span>
+            <strong><b id="supplyVoltage">0.00</b> V</strong>
+            <canvas id="driverVinGraph" class="metric-sparkline driver-vin-sparkline" width="240" height="28"
+                    role="img" aria-label="Driver VIN history is waiting for telemetry">Driver VIN history graph</canvas>
+          </article>
           <article class="metric"><span>Desired velocity</span><strong><b id="desiredVelocity">0.0</b> rad/s</strong></article>
           <article class="metric"><span>Measured velocity</span><strong><b id="measuredVelocity">0.0</b> rad/s</strong></article>
-          <article class="metric"><span>Motor current</span><strong><b id="motorCurrent">0.00</b> A</strong></article>
+          <article class="metric motor-current-metric">
+            <span>Motor current</span>
+            <strong><b id="motorCurrent">0.00</b> A</strong>
+            <canvas id="motorCurrentGraph" class="metric-sparkline motor-current-sparkline" width="240" height="28"
+                    role="img" aria-label="Motor current history is waiting for telemetry">Motor current history graph</canvas>
+          </article>
           <article class="metric rotor-position-metric">
             <span>Rotor position</span>
             <div class="rotor-readout">

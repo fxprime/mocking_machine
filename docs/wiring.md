@@ -101,6 +101,34 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
 7. Tune at low maximum duty and acceleration.
 8. Add a small imbalance only after unloaded behavior, emergency stop, enclosure, and mounting are validated.
 
+### Rotor zero calibration procedure
+
+1. Flash firmware using settings schema 20 or newer. Degree-based offsets from schemas 17–19
+   are cleared during migration.
+2. Disarm the motor and isolate drive power according to the rig procedure.
+3. Turn the rotor slowly through the zero-index sensor until the Calibration page reports an
+   accepted index.
+4. Move the rotor by hand to the physical position that should read `0°`, then keep it still.
+5. Select **Capture current position as 0°**. Firmware stores the directed wrapped tick distance
+   from the last accepted index:
+
+   `offset_ticks = wrap(direction × (current_tick - index_tick), CPR)`
+
+6. Review the integer tick candidate and select **Apply and save zero**.
+7. On every later accepted index, firmware filters the corrected index phase toward the
+   corresponding wrapped target using the configured correction gain:
+
+   `corrected = current + gain × shortest_wrapped_error(target, current)`
+
+   With the default gain of `0.1`, this is equivalent to `0.9 × current + 0.1 × target`.
+8. Firmware converts corrected ticks to degrees only for output:
+
+   `position_deg = wrap(corrected_ticks, CPR) × 360 / CPR`
+
+9. Turn the rotor through several complete revolutions and confirm the marked physical position
+   repeatedly returns to `0°`. If it moves, compare consecutive accepted index counts; each
+   difference should equal the calibrated CPR.
+
 
 
 

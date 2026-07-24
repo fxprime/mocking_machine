@@ -95,6 +95,18 @@ assert.match(indexSource, /id="startCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="stopCurrentCalibrationDrive"/);
 assert.match(indexSource, /id="rotorPosition"/, "Overview must show rotor position");
 assert.match(indexSource, /id="rotorNeedle"/, "Rotor position must include a visual indicator");
+assert.match(indexSource, /Motor current[\s\S]*id="motorCurrent"[\s\S]*id="motorCurrentGraph"/,
+  "Motor current badge must place its history graph below the numeric value");
+assert.match(indexSource, /id="motorCurrentGraph"[^>]*role="img"[^>]*aria-label=/,
+  "Motor current history must have a non-visual description");
+assert.match(indexSource, /Driver VIN[\s\S]*id="supplyVoltage"[\s\S]*id="driverVinGraph"/,
+  "Driver VIN badge must place its history graph below the numeric value");
+assert.match(indexSource, /id="driverVinGraph"[^>]*role="img"[^>]*aria-label=/,
+  "Driver VIN history must have a non-visual description");
+assert.match(appSource, /function drawOverviewSparklines\(\)[\s\S]*motorCurrentGraph[\s\S]*driverVinGraph/,
+  "Overview must update both compact telemetry graphs");
+assert.match(appSource, /function drawTelemetrySparkline\([\s\S]*samples\.slice\(-sampleCount\)[\s\S]*--measured/,
+  "Overview sparklines must render recent telemetry with the measured-value color token");
 assert.match(indexSource, /id="newProfile"/, "Profiles page must expose a create action");
 assert.match(indexSource, /id="runProfileDialog"/);
 assert.match(indexSource, /id="setDefaultProfile"/);
