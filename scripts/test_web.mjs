@@ -56,6 +56,10 @@ assert.match(indexSource, /id="startEncoderCalibration"/);
 assert.match(indexSource, /id="finishEncoderCalibration"/);
 assert.match(indexSource, /id="encoderCalibrationResult"/);
 assert.match(indexSource, /id="saveEncoderCalibration"/);
+assert.match(indexSource, /id="rotorZeroCalibrationWorkspace"/);
+assert.match(indexSource, /id="captureRotorZero"/);
+assert.match(indexSource, /stores its wrapped encoder-tick distance from the last accepted index/);
+assert.match(indexSource, /id="saveRotorZero"/);
 assert.match(indexSource, /id="resultCharacterizedVmax"/);
 assert.match(indexSource, /id="resultRecommendedAcceleration"/);
 assert.match(indexSource, /id="resultRecommendedJerk"/);
@@ -75,10 +79,14 @@ assert.match(appSource, /velocityEstimatorMethod:\s*data\.byteLength >= 172 \? d
   "GUI must decode the velocity-estimator selector");
 assert.match(appSource, /velocityAccelerationWindowSamples:\s*data\.byteLength >= 173 \? data\.getUint8\(172\) : 5/,
   "GUI must decode the schema-16 acceleration-history length");
+assert.match(appSource, /rotorZeroOffsetTicks:\s*data\.byteLength >= 177 \? data\.getUint32\(173, true\) : 0/,
+  "GUI must decode the schema-20 rotor-zero tick offset");
 assert.match(appSource, /velocityEstimatorMethod:\s*\{ id: 36,[\s\S]*0 = low-pass,[\s\S]*1 = characterized motor-model Kalman,[\s\S]*2 = encoder-window acceleration prediction/,
   "GUI must expose all three velocity-estimator methods through SET_PARAMETER");
 assert.match(appSource, /velocityAccelerationWindowSamples:\s*\{ id: 37,[\s\S]*Circular velocity-history length/,
   "GUI must expose the method-2 circular history length through SET_PARAMETER");
+assert.match(appSource, /rotorZeroOffsetTicks:\s*\{ id: 38,[\s\S]*Wrapped encoder-tick distance/,
+  "GUI must expose the saved rotor-zero tick offset through SET_PARAMETER");
 assert.match(indexSource, /id="resultModelTimeReverse"/,
   "Characterization review must display the identified motor-model time constants");
 assert.match(appSource, /Math\.min\(configuredVmax, detectedLimit\)/,
@@ -180,10 +188,21 @@ assert.match(firmwareSource, /static_assert\(sizeof\(VelocitySequencePayload\) =
 assert.doesNotMatch(indexSource, /id="currentCalibrationDialog"/);
 assert.doesNotMatch(indexSource, /id="motorTestCalibrateCurrent"/);
 assert.match(appSource, /CURRENT_CALIBRATION_STATUS:\s*0x0302/);
+assert.match(appSource, /ROTOR_ZERO_CALIBRATION:\s*0x0303/);
+assert.match(appSource, /ROTOR_ZERO_CALIBRATION_STATUS:\s*0x0304/);
 assert.match(appSource, /new Uint8Array\(5\)/);
 const calibrationCase = firmwareSource.slice(firmwareSource.indexOf("case MessageId::CurrentCalibration:"), firmwareSource.indexOf("case MessageId::SupplyVoltageCalibration:"));
 assert.doesNotMatch(calibrationCase, /currentSenseVoltage\(64U\)/, "Calibration capture must not block the control loop with a 64-read burst");
 assert.match(calibrationCase, /SettingsStore::validate\(candidate\)[\s\S]*transitionToStopped\(\);[\s\S]*settings_store_\.save\(candidate\)/, "Calibration motor must stop before an NVS write");
+const rotorZeroCase = firmwareSource.slice(firmwareSource.indexOf("case MessageId::RotorZeroCalibration:"), firmwareSource.indexOf("case MessageId::SupplyVoltageCalibration:"));
+assert.match(rotorZeroCase, /rotor_phase_tracker_\.referenced\(\)/,
+  "Rotor-zero capture must require an index-corrected phase");
+assert.match(rotorZeroCase, /positionTicksFromZeroIndex\(\s*telemetry_\.encoder_count,\s*telemetry_\.last_zero_encoder_count\)/,
+  "Rotor-zero capture must use one encoder-count difference from the last accepted index");
+assert.doesNotMatch(rotorZeroCase, /rotor_zero_calibration_accumulator_|64U/,
+  "Rotor-zero capture must not average samples");
+assert.match(rotorZeroCase, /SettingsStore::validate\(candidate\)[\s\S]*settings_store_\.save\(candidate\)/,
+  "Rotor-zero save must validate and persist the candidate");
 const metrics = calculateStepMetrics([
   { timestamp: 0, desired: 0, measured: 0 },
   { timestamp: 100000, desired: 10, measured: 1 },

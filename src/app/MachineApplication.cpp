@@ -88,6 +88,7 @@ struct SettingsPayload {
   float motor_model_encoder_measurement_noise_counts;
   uint8_t velocity_estimator_method;
   uint8_t velocity_acceleration_window_samples;
+  uint32_t rotor_zero_offset_ticks;
 };
 
 struct TelemetryPayload {
@@ -176,6 +177,7 @@ enum class ParameterId : uint16_t {
   CharacterizationRecommendationSafetyFactor,
   VelocityEstimatorMethod,
   VelocityAccelerationWindowSamples,
+  RotorZeroOffsetTicks,
 };
 
 struct ParameterPayload {
@@ -249,6 +251,26 @@ struct CurrentCalibrationStatusPayload {
   float candidate_offset_v;
 };
 
+enum class RotorZeroCalibrationAction : uint8_t {
+  Capture = 0,
+  Save = 1,
+  Cancel = 2,
+  RequestStatus = 3,
+};
+
+struct RotorZeroCalibrationPayload {
+  uint8_t action;
+};
+
+struct RotorZeroCalibrationStatusPayload {
+  uint8_t state;
+  uint8_t capture_count;
+  uint8_t last_result;
+  float current_position_deg;
+  uint32_t candidate_offset_ticks;
+  uint32_t saved_offset_ticks;
+};
+
 struct SupplyVoltageCalibrationPayload {
   float reference_voltage_v;
 };
@@ -286,11 +308,15 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 173U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 177U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
               "Current calibration status payload changed");
+static_assert(sizeof(RotorZeroCalibrationPayload) == 1U,
+              "Rotor-zero calibration command payload changed");
+static_assert(sizeof(RotorZeroCalibrationStatusPayload) == 15U,
+              "Rotor-zero calibration status payload changed");
 static_assert(sizeof(TelemetryPayload) == 84U, "Update protocol and browser TELEMETRY decoder");
 static_assert(sizeof(SupplyVoltageCalibrationPayload) == 4U,
               "Supply calibration payload must remain one float");
@@ -359,7 +385,8 @@ void MachineApplication::begin() {
                         settings_.encoder.zero_index_minimum_separation_revolutions));
   rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                  settings_.encoder.direction,
-                                 settings_.encoder.zero_index_correction_gain);
+                                 settings_.encoder.zero_index_correction_gain,
+                                 settings_.encoder.zero_position_offset_ticks);
   motor_initialized_ = motor_.begin(settings_);
   if (!motor_initialized_) {
     faults_ |= FaultInvalidConfiguration;
@@ -443,6 +470,10 @@ void MachineApplication::runOnce() {
   if (current_calibration_status_pending_) {
     current_calibration_status_pending_ =
         !sendCurrentCalibrationStatus(transmit_sequence_++);
+  }
+  if (rotor_zero_calibration_status_pending_) {
+    rotor_zero_calibration_status_pending_ =
+        !sendRotorZeroCalibrationStatus(transmit_sequence_++);
   }
   serial_link_.serviceTx();
 }
@@ -1162,6 +1193,16 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.velocity_acceleration_window_samples =
               static_cast<uint32_t>(update.value);
           break;
+        case ParameterId::RotorZeroOffsetTicks:
+          if (!whole(update.value) || update.value < 0.0F ||
+              update.value >= static_cast<float>(
+                                  candidate.encoder.counts_per_output_revolution)) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+            return;
+          }
+          candidate.encoder.zero_position_offset_ticks =
+              static_cast<uint32_t>(update.value);
+          break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -1202,7 +1243,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           settings_.encoder.zero_index_minimum_separation_revolutions));
       rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                      settings_.encoder.direction,
-                                     settings_.encoder.zero_index_correction_gain);
+                                     settings_.encoder.zero_index_correction_gain,
+                                     settings_.encoder.zero_position_offset_ticks);
       if (!settings_.safety.current_sense_enabled) {
         faults_ &= ~static_cast<uint32_t>(FaultOverCurrent);
       }
@@ -1479,6 +1521,91 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           !sendCurrentCalibrationStatus(frame.sequence);
       return;
     }
+    case MessageId::RotorZeroCalibration: {
+      if (frame.payload_size != sizeof(RotorZeroCalibrationPayload)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidLength);
+        return;
+      }
+      RotorZeroCalibrationPayload calibration{};
+      std::memcpy(&calibration, frame.payload, sizeof(calibration));
+      if (calibration.action >
+          static_cast<uint8_t>(RotorZeroCalibrationAction::RequestStatus)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      const auto action =
+          static_cast<RotorZeroCalibrationAction>(calibration.action);
+      if (action == RotorZeroCalibrationAction::RequestStatus) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        rotor_zero_calibration_status_pending_ =
+            !sendRotorZeroCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (action == RotorZeroCalibrationAction::Cancel) {
+        rotor_zero_calibration_candidate_valid_ = false;
+        rotor_zero_calibration_last_result_ = ResultCode::Ok;
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        rotor_zero_calibration_status_pending_ =
+            !sendRotorZeroCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (state_ != RunState::Disarmed ||
+          characterization_stage_ != CharacterizationStage::Idle) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
+        return;
+      }
+      if (action == RotorZeroCalibrationAction::Capture) {
+        if (!rotor_phase_tracker_.referenced()) {
+          sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+          return;
+        }
+        rotor_zero_calibration_candidate_ticks_ =
+            rotor_phase_tracker_.positionTicksFromZeroIndex(
+                telemetry_.encoder_count, telemetry_.last_zero_encoder_count);
+        rotor_zero_calibration_candidate_valid_ = true;
+        rotor_zero_calibration_last_result_ = ResultCode::Ok;
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        rotor_zero_calibration_status_pending_ =
+            !sendRotorZeroCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (!rotor_zero_calibration_candidate_valid_) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      MachineSettings candidate = settings_;
+      candidate.encoder.zero_position_offset_ticks =
+          rotor_zero_calibration_candidate_ticks_;
+      if (!SettingsStore::validate(candidate)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      transitionToStopped();
+      if (!settings_store_.save(candidate)) {
+        rotor_zero_calibration_last_result_ = ResultCode::StorageFailure;
+        sendAck(frame.sequence, frame.message_id, ResultCode::StorageFailure);
+        rotor_zero_calibration_status_pending_ =
+            !sendRotorZeroCalibrationStatus(frame.sequence);
+        return;
+      }
+      settings_ = candidate;
+      rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
+                                     settings_.encoder.direction,
+                                     settings_.encoder.zero_index_correction_gain,
+                                     settings_.encoder.zero_position_offset_ticks);
+      rotor_phase_tracker_.synchronizeToZeroIndex(
+          telemetry_.last_zero_encoder_count, telemetry_.zero_index_sequence);
+      telemetry_.rotor_position_deg = rotor_phase_tracker_.update(
+          telemetry_.encoder_count, telemetry_.last_zero_encoder_count,
+          telemetry_.zero_index_sequence);
+      rotor_zero_calibration_candidate_valid_ = false;
+      rotor_zero_calibration_last_result_ = ResultCode::Ok;
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      sendSettings(frame.sequence);
+      rotor_zero_calibration_status_pending_ =
+          !sendRotorZeroCalibrationStatus(frame.sequence);
+      return;
+    }
     case MessageId::SupplyVoltageCalibration: {
       if (frame.payload_size != sizeof(SupplyVoltageCalibrationPayload) ||
           state_ == RunState::Running) {
@@ -1632,6 +1759,7 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.motor_model.encoder_measurement_noise_counts,
       static_cast<uint8_t>(settings_.velocity_estimator_method),
       static_cast<uint8_t>(settings_.velocity_acceleration_window_samples),
+      settings_.encoder.zero_position_offset_ticks,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }
@@ -1650,6 +1778,22 @@ bool MachineApplication::sendCurrentCalibrationStatus(const uint16_t sequence) {
   };
   return serial_link_.send(protocol::MessageId::CurrentCalibrationStatus, sequence,
                            &payload, sizeof(payload));
+}
+
+bool MachineApplication::sendRotorZeroCalibrationStatus(
+    const uint16_t sequence) {
+  const uint8_t calibration_state =
+      rotor_zero_calibration_candidate_valid_ ? 2U : 0U;
+  const RotorZeroCalibrationStatusPayload payload{
+      calibration_state,
+      static_cast<uint8_t>(rotor_zero_calibration_candidate_valid_ ? 1U : 0U),
+      static_cast<uint8_t>(rotor_zero_calibration_last_result_),
+      telemetry_.rotor_position_deg,
+      rotor_zero_calibration_candidate_ticks_,
+      settings_.encoder.zero_position_offset_ticks,
+  };
+  return serial_link_.send(protocol::MessageId::RotorZeroCalibrationStatus,
+                           sequence, &payload, sizeof(payload));
 }
 
 bool MachineApplication::sendProfile(const VelocityProfileConfiguration& profile,

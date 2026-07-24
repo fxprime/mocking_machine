@@ -56,6 +56,7 @@ class MachineApplication final {
   bool sendCharacterizationResult(uint16_t sequence);
   bool sendCharacterizationStatus(uint16_t sequence);
   bool sendCurrentCalibrationStatus(uint16_t sequence);
+  bool sendRotorZeroCalibrationStatus(uint16_t sequence);
   void sendAck(uint16_t sequence, protocol::MessageId request, protocol::ResultCode result);
   void transitionToStopped();
   bool clearFaultsAndRecheck();
@@ -147,6 +148,11 @@ class MachineApplication final {
   uint8_t current_calibration_capture_point_ = 0U;
   protocol::ResultCode current_calibration_last_result_ = protocol::ResultCode::Ok;
   bool current_calibration_status_pending_ = false;
+  uint32_t rotor_zero_calibration_candidate_ticks_ = 0U;
+  protocol::ResultCode rotor_zero_calibration_last_result_ =
+      protocol::ResultCode::Ok;
+  bool rotor_zero_calibration_candidate_valid_ = false;
+  bool rotor_zero_calibration_status_pending_ = false;
 };
 
 }  // namespace mm

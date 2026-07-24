@@ -34,7 +34,7 @@ flowchart TB
 
 | รายการ | ค่าในเฟิร์มแวร์ปัจจุบัน |
 |---|---|
-| Wire protocol / settings schema | Version 1 / schema 16 |
+| Wire protocol / settings schema | Version 1 / schema 20 |
 | Control loop | ค่าเริ่มต้น 2,000 µs หรือ 500 Hz |
 | UART / telemetry | ค่าเริ่มต้น 115200 bit/s / 50 Hz |
 | Encoder CPR | ค่าเริ่มต้น 184 counts/rev เป็น placeholder; ต้องสอบเทียบกับเครื่องจริง |

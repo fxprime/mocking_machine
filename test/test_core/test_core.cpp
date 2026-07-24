@@ -104,16 +104,38 @@ void test_characterization_result_frame_crc_vector() {
       0xEA4BU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
-void test_settings_schema_16_frame_crc_vector() {
-  std::array<uint8_t, 8U + 173U> protected_bytes{};
+void test_settings_schema_20_frame_crc_vector() {
+  std::array<uint8_t, 8U + 177U> protected_bytes{};
   protected_bytes[0] = 1U;
   protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
   protected_bytes[3] = 0x01U;
   protected_bytes[4] = 0x34U;
   protected_bytes[5] = 0x12U;
-  protected_bytes[6] = 173U;
+  protected_bytes[6] = 177U;
   TEST_ASSERT_EQUAL_HEX16(
-      0xBA2DU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+      0x3F78U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+}
+
+void test_rotor_zero_calibration_frame_crc_vector() {
+  std::array<uint8_t, 8U + 1U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x03U;  // ROTOR_ZERO_CALIBRATION 0x0303.
+  protected_bytes[3] = 0x03U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 1U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xA124U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+
+  std::array<uint8_t, 8U + 15U> status_bytes{};
+  status_bytes[0] = 1U;
+  status_bytes[2] = 0x04U;  // ROTOR_ZERO_CALIBRATION_STATUS 0x0304.
+  status_bytes[3] = 0x03U;
+  status_bytes[4] = 0x34U;
+  status_bytes[5] = 0x12U;
+  status_bytes[6] = 15U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0x75C9U, protocol::crc16CcittFalse(status_bytes.data(), status_bytes.size()));
 }
 
 void test_velocity_step_sequence_holds_each_level_and_finishes_at_zero() {
@@ -153,7 +175,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(16U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(20U, MachineSettings::kSchemaVersion);
 }
 
 void test_incremental_controller_scales_integral_by_time() {
@@ -404,6 +426,61 @@ void test_rotor_phase_tracker_applies_fractional_correction_once_per_zero() {
   TEST_ASSERT_FLOAT_WITHIN(0.001F, 98.804348F, tracker.update(235, 189, 2U));
 }
 
+void test_rotor_phase_tracker_applies_user_zero_without_losing_reference() {
+  RotorPhaseTracker tracker;
+  tracker.configure(184U, 1, 0.10F, 0);
+  tracker.update(0, 0, 1U);
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 90.0F, tracker.update(46, 0, 1U));
+
+  tracker.configure(184U, 1, 0.10F, 46);
+  TEST_ASSERT_TRUE(tracker.referenced());
+  TEST_ASSERT_EQUAL_UINT32(46U, tracker.zeroPositionOffsetTicks());
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 0.0F, tracker.update(46, 0, 1U));
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 270.0F, tracker.update(0, 0, 1U));
+}
+
+void test_rotor_user_zero_does_not_drift_during_later_index_correction() {
+  RotorPhaseTracker tracker;
+  tracker.configure(184U, 1, 0.10F, 0);
+  tracker.update(0, 0, 1U);
+
+  // The index is five counts late. Fractional correction leaves residual phase
+  // error at the moment the user captures a physical point 46 counts later.
+  tracker.update(189, 189, 2U);
+  tracker.update(235, 189, 2U);
+  const uint32_t candidate_offset_ticks =
+      tracker.positionTicksFromZeroIndex(235, 189);
+  TEST_ASSERT_EQUAL_UINT32(46U, candidate_offset_ticks);
+  tracker.configure(184U, 1, 0.10F, candidate_offset_ticks);
+  tracker.synchronizeToZeroIndex(189, 2U);
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 0.0F, tracker.update(235, 189, 2U));
+
+  // A later index correction must not move that same physical 46-count point.
+  tracker.update(373, 373, 3U);
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 0.0F, tracker.update(419, 373, 3U));
+}
+
+void test_rotor_zero_index_filters_wrapped_tick_toward_saved_reference() {
+  RotorPhaseTracker tracker;
+  tracker.configure(184U, 1, 0.10F, 46);
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 270.0F, tracker.update(0, 0, 1U));
+
+  // At the next index, the corrected phase is -41 ticks while its target is
+  // -46 ticks. A 0.10 correction moves it to -41.5 ticks:
+  // 0.90 * -41 + 0.10 * -46.
+  TEST_ASSERT_FLOAT_WITHIN(0.001F, 278.804348F,
+                           tracker.update(189, 189, 2U));
+}
+
+void test_rotor_zero_capture_uses_one_index_relative_encoder_count() {
+  RotorPhaseTracker tracker;
+  tracker.configure(184U, 1, 0.10F);
+  TEST_ASSERT_EQUAL_UINT32(46U, tracker.positionTicksFromZeroIndex(235, 189));
+
+  tracker.configure(184U, -1, 0.10F);
+  TEST_ASSERT_EQUAL_UINT32(138U, tracker.positionTicksFromZeroIndex(235, 189));
+}
+
 void test_sine_profile_stays_one_direction() {
   VelocityProfileConfiguration configuration{};
   configuration.kind = ProfileKind::Sine;
@@ -474,7 +551,7 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(16U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(20U, settings.schema_version);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
                           static_cast<uint8_t>(settings.velocity_estimator_method));
   TEST_ASSERT_EQUAL_UINT32(5U, settings.velocity_acceleration_window_samples);
@@ -602,7 +679,8 @@ int main(int, char**) {
   RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
-  RUN_TEST(test_settings_schema_16_frame_crc_vector);
+  RUN_TEST(test_settings_schema_20_frame_crc_vector);
+  RUN_TEST(test_rotor_zero_calibration_frame_crc_vector);
   RUN_TEST(test_velocity_step_sequence_holds_each_level_and_finishes_at_zero);
   RUN_TEST(test_velocity_sequence_frame_crc_vector);
   RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
@@ -624,6 +702,10 @@ int main(int, char**) {
   RUN_TEST(test_zero_index_rejects_late_bounce_without_rotor_travel);
   RUN_TEST(test_rotor_phase_tracker_uses_encoder_after_first_zero_reference);
   RUN_TEST(test_rotor_phase_tracker_applies_fractional_correction_once_per_zero);
+  RUN_TEST(test_rotor_phase_tracker_applies_user_zero_without_losing_reference);
+  RUN_TEST(test_rotor_user_zero_does_not_drift_during_later_index_correction);
+  RUN_TEST(test_rotor_zero_index_filters_wrapped_tick_toward_saved_reference);
+  RUN_TEST(test_rotor_zero_capture_uses_one_index_relative_encoder_count);
   RUN_TEST(test_sine_profile_stays_one_direction);
   RUN_TEST(test_waypoint_profile_interpolates_and_stops_at_duration);
   RUN_TEST(test_profile_collection_creates_without_replacing_existing_id);

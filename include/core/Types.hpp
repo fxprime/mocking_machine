@@ -122,6 +122,7 @@ struct EncoderConfiguration {
   float zero_index_correction_gain = kDefaultZeroIndexCorrectionGain;
   float zero_index_minimum_separation_revolutions =
       kDefaultZeroIndexMinimumSeparationRevolutions;
+  uint32_t zero_position_offset_ticks = 0U;
 };
 
 struct CharacterizationConfiguration {
@@ -178,7 +179,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 16;
+  static constexpr uint32_t kSchemaVersion = 20;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

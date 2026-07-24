@@ -91,7 +91,10 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
    and percentage change before saving. The displayed count includes all decoded quadrature
    edges, so it may be four times a single-channel pulse or magnetic pole-cycle specification.
    Direction is intentionally not changed by this calibration.
-3. Verify zero-index timestamp/count by turning slowly by hand.
+3. Verify zero-index timestamp/count by turning slowly by hand. Then move the rotor to the desired
+   physical 0° point and use **Calibration → Rotor position zero**. Hold it still while firmware
+   captures the integer wrapped encoder-tick difference from the accepted index, review the
+   candidate tick offset, and save it. Degrees are calculated only for display after correction.
 4. Verify INA/INB/PWM and DIAG levels with a scope or logic analyzer.
 5. Calibrate GPIO36 VIN against a multimeter, then use the two-point current calibration with a current-limited bench supply and trusted ammeter.
 6. Secure the unloaded motor in the final guard and start **Calibration → Motor characterization**. The equivalent terminal sequence is `arm` followed by `characterize start CONFIRM_UNLOADED`.
@@ -125,4 +128,4 @@ gx16 cable 6P
 | female pin |  carry |
 |---|---|
 | red + yellow | M+ |
-| black +  green | M- | 
+| black +  green | M- |

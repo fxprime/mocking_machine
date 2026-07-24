@@ -45,6 +45,8 @@ enum class MessageId : uint16_t {
   CurrentCalibration = 0x0300,
   SupplyVoltageCalibration = 0x0301,
   CurrentCalibrationStatus = 0x0302,
+  RotorZeroCalibration = 0x0303,
+  RotorZeroCalibrationStatus = 0x0304,
   CharacterizationResult = 0x0310,
   CharacterizationAction = 0x0311,
   CharacterizationStatus = 0x0312,

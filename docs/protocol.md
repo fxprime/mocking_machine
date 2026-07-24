@@ -83,7 +83,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0001` | [HEARTBEAT](#heartbeat-0x0001) | Device → host | 65 | Device identity, state, and health |
 | `0x0002` | [ACK](#ack-0x0002) | Device → host | 3 | Command result |
 | `0x0100` | [GET_SETTINGS](#get_settings-0x0100) | Host → device | 0 | Request current settings |
-| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 173 | Complete runtime settings snapshot |
+| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 177 | Complete runtime settings snapshot |
 | `0x0110` | [SET_CONTROLLER](#controller-gain-messages-0x0110-0x0114) | Host → device | 12 | Apply gains to RAM |
 | `0x0111` | [SET_DRIVER_DIAGNOSTIC](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable EN/DIAG protection |
 | `0x0112` | [SET_CURRENT_SENSE](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable overcurrent protection |
@@ -126,6 +126,8 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0300` | [CURRENT_CALIBRATION](#current_calibration-0x0300) | Host → device | 5 | Control two-point current calibration |
 | `0x0301` | [SUPPLY_VOLTAGE_CALIBRATION](#supply_voltage_calibration-0x0301) | Host → device | 4 | Calibrate the VIN divider |
 | `0x0302` | [CURRENT_CALIBRATION_STATUS](#current_calibration_status-0x0302) | Device → host | 27 | Current calibration progress/result |
+| `0x0303` | [ROTOR_ZERO_CALIBRATION](#rotor_zero_calibration-0x0303) | Host → device | 1 | Capture, save, or cancel the user rotor zero |
+| `0x0304` | [ROTOR_ZERO_CALIBRATION_STATUS](#rotor_zero_calibration_status-0x0304) | Device → host | 15 | Rotor-zero capture progress/result |
 | `0x0310` | [CHARACTERIZATION_RESULT](#characterization_result-0x0310) | Device → host | 48 | Pending motor characterization result |
 | `0x0311` | [CHARACTERIZATION_ACTION](#characterization_action-0x0311) | Host → device | 1 | Save or discard the pending result |
 | `0x0312` | [CHARACTERIZATION_STATUS](#characterization_status-0x0312) | Device → host | 10 | Live characterization progress |
@@ -217,6 +219,7 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 167 | `motor_model_encoder_measurement_noise_counts` | `f32` | counts | Encoder quantization noise used for measurement covariance |
 | 171 | `velocity_estimator_method` | `u8` | `0`–`2` | 0 low-pass; 1 motor-model Kalman; 2 encoder-window acceleration prediction |
 | 172 | `velocity_acceleration_window_samples` | `u8` | 2–32 | Circular velocity-history length for estimator method 2 |
+| 173 | `rotor_zero_offset_ticks` | `u32` | encoder ticks | Wrapped tick distance from the accepted index to the user zero; valid `[0, counts_per_revolution)` |
 
 The encoder watchdog starts when desired velocity first exceeds its configured threshold. Each valid quadrature transition refreshes activity. Dropping below the threshold or stopping resets the watchdog window.
 
@@ -393,7 +396,7 @@ One timestamped machine sample.
 | 76 | `zero_index_sequence` | `u32` | count | Number of accepted index edges |
 | 80 | `zero_index_rejected_count` | `u32` | count | Number of rejected bounce/too-close edges |
 
-Incremental P/I/D terms are zero while velocity control is inactive. Rotor position becomes referenced after `zero_index_sequence` is nonzero. The first accepted index establishes the phase offset; later pulses apply only `zero_index_correction_gain × phase_error`. Rejected pulses do not change the accepted timestamp, encoder count, sequence, or phase.
+Incremental P/I/D terms are zero while velocity control is inactive. Rotor position becomes referenced after `zero_index_sequence` is nonzero. The persisted `rotor_zero_offset_ticks` remains entirely in encoder-count space. At each accepted index, its corrected wrapped tick is filtered toward `-rotor_zero_offset_ticks` using the shortest signed phase error: `new = (1 - zero_index_correction_gain) × current + zero_index_correction_gain × target`. Only the final corrected wrapped count is converted to degrees. Rejected pulses do not change the accepted timestamp, encoder count, sequence, or phase.
 
 ### CURRENT_CALIBRATION (0x0300)
 
@@ -427,6 +430,29 @@ Firmware averages 64 raw ADC readings, calculates the divider gain, applies it i
 | 15 | `point2_reference_a` | `f32` | A | Reference current at point 2 |
 | 19 | `candidate_gain_a_per_v` | `f32` | A/V | Calculated candidate gain |
 | 23 | `candidate_offset_v` | `f32` | V | Calculated candidate offset |
+
+### ROTOR_ZERO_CALIBRATION (0x0303)
+
+Controls non-blocking rotor-zero capture. The one-byte payload is a
+[ROTOR_ZERO_CALIBRATION_ACTION](#rotor_zero_calibration_action). `CAPTURE` is accepted only while
+disarmed, with characterization idle and rotor phase referenced by an accepted zero-index edge.
+
+Firmware captures the current directed, wrapped encoder-count difference from the last accepted
+zero-index count. `SAVE` persists that integer tick offset, fully synchronizes the tracker to the
+last accepted index, and uses its negative wrapped value as the index phase-correction target.
+Every later accepted index filters the current corrected tick toward that same target. Conversion
+to degrees happens only after correction; there is no persisted or intermediate degree offset.
+
+### ROTOR_ZERO_CALIBRATION_STATUS (0x0304)
+
+| Offset | Field name | Type | Units / values | Description |
+|---:|---|---|---|---|
+| 0 | `state` | `u8` | `0` idle; `2` candidate | Workflow state |
+| 1 | `capture_count` | `u8` | `0`, `1` | One when the candidate encoder tick has been captured |
+| 2 | `last_result` | `u8` | [RESULT_CODE](#result_code) | Most recent capture/save result |
+| 3 | `current_position_deg` | `f32` | deg | Current corrected and offset rotor position |
+| 7 | `candidate_offset_ticks` | `u32` | encoder ticks | Pending wrapped tick offset when state is `2` |
+| 11 | `saved_offset_ticks` | `u32` | encoder ticks | Active persisted wrapped tick offset |
 
 ### CHARACTERIZATION_RESULT (0x0310)
 
@@ -534,6 +560,15 @@ Multiple bits may be set simultaneously.
 | 4 | `CANCEL` | Discard candidate and retain saved calibration |
 | 5 | `REQUEST_STATUS` | Emit `CURRENT_CALIBRATION_STATUS` |
 
+### ROTOR_ZERO_CALIBRATION_ACTION
+
+| Value | Name | Description |
+|---:|---|---|
+| 0 | `CAPTURE` | Capture one index-relative encoder count and calculate a candidate |
+| 1 | `SAVE` | Apply and persist the pending candidate |
+| 2 | `CANCEL` | Discard the active capture or pending candidate |
+| 3 | `REQUEST_STATUS` | Emit `ROTOR_ZERO_CALIBRATION_STATUS` |
+
 ### CHARACTERIZATION_ACTION_FLAGS (bitmask)
 
 | Value | Name | Description |
@@ -601,6 +636,7 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 35 | `CHARACTERIZATION_RECOMMENDATION_SAFETY_FACTOR` | 0–1 | Recommendation multiplier; valid 0.10–1.0 |
 | 36 | `VELOCITY_ESTIMATOR_METHOD` | `0`, `1`, `2` | Select low-pass, characterized Kalman, or encoder-window acceleration prediction |
 | 37 | `VELOCITY_ACCELERATION_WINDOW_SAMPLES` | samples | Method-2 circular history length; valid 2–32 |
+| 38 | `ROTOR_ZERO_OFFSET_TICKS` | encoder ticks | Wrapped index-to-user-zero distance; integer in `[0, counts_per_revolution)` |
 
 Lower current-filter cutoff reduces noise but delays software overcurrent detection. Hardware current limiting and a correctly sized fuse remain mandatory.
 
@@ -653,7 +689,7 @@ Structured settings, telemetry, profiles, calibration status, and most actuator 
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 16.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 20.
 
 | Settings schema | Change |
 |---:|---|
@@ -663,8 +699,12 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 14 | Added characterized motor model and Kalman-observer settings |
 | 15 | Added explicit velocity-estimator method selection |
 | 16 | Added method-2 circular velocity-history length |
+| 17 | Added persistent rotor-position zero offset and settled calibration workflow |
+| 18 | Made rotor zero sensor-index-relative so fractional correction cannot move it |
+| 19 | Moved rotor zero into the count-domain index-correction target and removed averaging |
+| 20 | Persisted rotor zero as an integer wrapped encoder-tick offset; degrees are output-only |
 
-The current loader explicitly migrates valid schema 4–15 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-16 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–19 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-20 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.
@@ -675,5 +715,6 @@ that schema enabled implicitly. Other older settings migrate to method `0`.
 - The schema-14 motor-model `SETTINGS` extension begins at byte 143.
 - The schema-15 estimator-method `SETTINGS` extension begins at byte 171.
 - The schema-16 acceleration-window `SETTINGS` extension begins at byte 172.
+- The schema-20 integer rotor-zero-offset `SETTINGS` field begins at byte 173.
 
 Message IDs, packed field order, fixed-array capacities, and CRC behavior are protocol contracts. Any change to them requires synchronized firmware, browser, tests, and this document.

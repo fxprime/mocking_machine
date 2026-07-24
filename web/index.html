@@ -286,6 +286,37 @@
           </div>
         </section>
       </article>
+      <article id="rotorZeroCalibrationWorkspace" class="panel">
+        <div class="panel-heading">
+          <div><h2>Rotor position zero</h2><p>Move the rotor by hand to the physical position that should read 0°. Firmware stores its wrapped encoder-tick distance from the last accepted index.</p></div>
+          <span id="rotorZeroCalibrationState" class="status-badge offline">● Ready</span>
+        </div>
+        <div class="fault-banner">▲ Disarm the motor and isolate drive power according to your rig procedure. Rotor phase must first be referenced by an accepted zero-index edge.</div>
+        <div class="metric-grid compact-metrics">
+          <article class="metric"><span>Live corrected position</span><strong><b id="rotorZeroLivePosition">—</b>°</strong></article>
+          <article class="metric"><span>Saved position offset</span><strong><b id="rotorZeroSavedOffset">—</b> ticks</strong></article>
+        </div>
+        <ol class="calibration-steps">
+          <li>Turn the rotor through the zero-index sensor once if the live position is not referenced.</li>
+          <li>Move the rotor to the physical zero point.</li>
+          <li>Capture that encoder tick, review the calculated offset, then save it.</li>
+        </ol>
+        <div class="action-row">
+          <button id="captureRotorZero" type="button" disabled>Capture current position as 0°</button>
+        </div>
+        <section id="rotorZeroCalibrationResult" class="hidden" aria-live="polite">
+          <h3>Review candidate</h3>
+          <dl class="result-grid">
+            <div><dt>New saved offset</dt><dd><span id="rotorZeroCandidateOffset">—</span> ticks</dd></div>
+            <div><dt>Position after save</dt><dd>0.0°</dd></div>
+          </dl>
+          <p class="notice">The candidate is not applied until Save. Every accepted index filters the corrected wrapped tick toward the corresponding offset target; conversion to degrees happens afterward.</p>
+          <div class="dialog-actions calibration-actions">
+            <button id="discardRotorZero" type="button">Discard candidate</button>
+            <button id="saveRotorZero" type="button" class="primary">Apply and save zero</button>
+          </div>
+        </section>
+      </article>
       <article id="currentCalibrationWorkspace" class="panel">
         <div class="panel-heading"><div><h2>Two-point current calibration</h2><p>Capture zero current, run the motor from this workspace, then capture a higher-current point. No calibration value is applied until Save.</p></div><span id="currentCalibrationState" class="status-badge offline">● No points</span></div>
         <div class="fault-banner">▲ Remove imbalance weights, close the rotor guard, connect a trusted current meter, and keep the emergency stop accessible.</div>
