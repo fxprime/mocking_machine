@@ -97,3 +97,32 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
 6. Secure the unloaded motor in the final guard and start **Calibration → Motor characterization**. The equivalent terminal sequence is `arm` followed by `characterize start CONFIRM_UNLOADED`.
 7. Tune at low maximum duty and acceleration.
 8. Add a small imbalance only after unloaded behavior, emergency stop, enclosure, and mounting are validated.
+
+
+
+
+
+
+# GX16 Harness
+
+
+## Signal + 3.3v for motor and encoder stuff
+
+gx16 cable 6P
+
+| female pin | male panel plug | carry | 
+|---|---|---|
+| black + gray | 1 | GND |
+| green | 2 | Encoder C1 |
+| yellow | 3 | zero trigger DOUT |
+| blue | 4 | Encoder C2 |
+| red + orange | 5 | Encoder + zero trigger  3.3V |
+| NC | 6 | NC |
+
+
+## Motor 
+
+| female pin |  carry |
+|---|---|
+| red + yellow | M+ |
+| black +  green | M- | 
