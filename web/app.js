@@ -804,7 +804,7 @@ function setConnected(value) {
   $("connectionState").textContent = value ? "● Connected" : "● Disconnected";
   $("connectionState").className = `status-badge ${value ? "online" : "offline"}`;
   $("connectButton").textContent = value ? "Disconnect" : "Connect";
-  for (const id of ["stopButton", "armButton", "runButton", "loadGains", "saveConfig", "characterizeButton", "openVinCalibration", "saveDriverDiagnostic", "saveCurrentSense", "startMotorTest", "stopMotorTest", "startTuningTest", "sendTerminal"]) $(id).disabled = !value;
+  for (const id of ["stopButton", "runButton", "loadGains", "saveConfig", "characterizeButton", "openVinCalibration", "saveDriverDiagnostic", "saveCurrentSense", "startMotorTest", "stopMotorTest", "startTuningTest", "sendTerminal"]) $(id).disabled = !value;
   $("exportParameters").disabled = !value || !Number.isFinite(Number(settings.schema));
   $("importParameters").disabled = !value || !Number.isFinite(Number(settings.schema));
   $("saveProfile").disabled = !value;
@@ -815,7 +815,8 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  renderMachineStateControl();
   updateExportButton();
   renderRunProfileDialog();
   renderRotorLoadSetup();
@@ -888,6 +889,7 @@ function updateState(state, faults) {
   if (currentCalibrationDriveActive && state !== 1) setCurrentCalibrationDriveActive(false);
   const names = ["DISARMED", "ARMED", "RUNNING", "FAULT"];
   $("machineState").textContent = names[state] ?? `UNKNOWN ${state}`;
+  renderMachineStateControl();
   $("faultBanner").classList.toggle("hidden", faults === 0);
   $("clearFaultButton").disabled = !connected || faults === 0;
   const faultNames = [[1, "control overrun"], [2, "driver diagnostic"], [4, "overcurrent"], [8, "encoder timeout"], [16, "invalid configuration"], [32, "VIN undervoltage"], [64, "VIN overvoltage"]];
@@ -897,6 +899,68 @@ function updateState(state, faults) {
     renderProfiles();
     renderRunProfileDialog();
     renderRotorLoadSetup();
+  }
+}
+
+function renderMachineStateControl() {
+  const control = $("machineStateControl");
+  const action = $("machineStateAction");
+  const stateClasses = ["disconnected", "disarmed", "armed", "running", "fault"];
+  control.classList.remove(...stateClasses);
+
+  if (!connected) {
+    control.classList.add("disconnected");
+    control.disabled = true;
+    control.setAttribute("aria-pressed", "false");
+    control.setAttribute("aria-label", "Machine disconnected");
+    action.textContent = "Connect to control output";
+    return;
+  }
+  if (renderedMachineStatusKey === undefined) {
+    control.classList.add("disconnected");
+    control.disabled = true;
+    control.setAttribute("aria-pressed", "false");
+    control.setAttribute("aria-label", "Connected; waiting for machine state");
+    $("machineState").textContent = "WAITING";
+    action.textContent = "Waiting for firmware state";
+    return;
+  }
+
+  const names = ["DISARMED", "ARMED", "RUNNING", "FAULT"];
+  $("machineState").textContent = names[latestState] ?? `UNKNOWN ${latestState}`;
+  if (latestState === 0 && latestFaults === 0) {
+    control.classList.add("disarmed");
+    control.disabled = false;
+    control.setAttribute("aria-pressed", "false");
+    control.setAttribute("aria-label", "Machine disarmed. Activate to arm motor output");
+    action.textContent = "Activate to arm output";
+  } else if (latestState === 1 || latestState === 2) {
+    control.classList.add(latestState === 1 ? "armed" : "running");
+    control.disabled = false;
+    control.setAttribute("aria-pressed", "true");
+    control.setAttribute(
+        "aria-label",
+        `Machine ${latestState === 1 ? "armed" : "running"}. Activate to stop and disarm`);
+    action.textContent = "Activate to stop and disarm";
+  } else {
+    control.classList.add("fault");
+    control.disabled = true;
+    control.setAttribute("aria-pressed", "false");
+    control.setAttribute("aria-label", "Machine faulted. Clear faults before arming");
+    action.textContent = "Clear faults before arming";
+  }
+}
+
+async function toggleMachineOutput() {
+  if (!connected) return;
+  if (latestState === 0) {
+    if (latestFaults !== 0) return toast("Clear and recheck faults before arming output.");
+    if (!await confirmSafety("Verify the rotor guard is closed, the emergency stop works, and the area is clear. Arming permits PWM output.")) return;
+    await sendAscii("arm");
+    return;
+  }
+  if (latestState === 1 || latestState === 2) {
+    await stopAllManualOutputs(true);
   }
 }
 
@@ -2508,7 +2572,7 @@ $("baud").addEventListener("change", () => {
   writeBaudPreference(localPreferenceStorage(), $("baud").value);
 });
 $("stopButton").addEventListener("click", () => stopAllManualOutputs(true));
-$("armButton").addEventListener("click", async () => { if (await confirmSafety("Verify the rotor guard is closed, the emergency stop works, and the area is clear. Arming permits PWM output.")) await sendAscii("arm"); });
+$("machineStateControl").addEventListener("click", toggleMachineOutput);
 $("runButton").addEventListener("click", () => {
   $("runProfileStatus").textContent = "";
   renderRunProfileDialog();

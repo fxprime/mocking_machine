@@ -114,6 +114,14 @@ assert.match(indexSource, /id="rotorLoadDiagram"/);
 assert.match(indexSource, /id="loadSlotDialog"/);
 assert.match(indexSource, /class="overview-status-layout"[\s\S]*class="metric-grid overview-metrics"[\s\S]*Machine state[\s\S]*Driver VIN[\s\S]*Desired velocity[\s\S]*Measured velocity[\s\S]*Motor current[\s\S]*Rotor position[\s\S]*class="panel rotor-load-panel"/,
   "Overview must place the ordered 2x3 machine metrics beside the rotor-load panel");
+assert.match(indexSource, /id="machineStateControl"[^>]*type="button"[^>]*aria-pressed="false"/,
+  "Machine state metric must be a keyboard-operable arm/disarm control");
+assert.doesNotMatch(indexSource, /id="armButton"/,
+  "The separate Overview arm button must move into the Machine state metric");
+assert.match(appSource, /function toggleMachineOutput\(\)[\s\S]*confirmSafety\([\s\S]*sendAscii\("arm"\)[\s\S]*stopAllManualOutputs\(true\)/,
+  "Machine state control must reuse guarded arm and immediate stop/disarm flows");
+assert.match(appSource, /function renderMachineStateControl\(\)[\s\S]*latestState === 0[\s\S]*disarmed[\s\S]*latestState === 1 \|\| latestState === 2[\s\S]*armed/,
+  "Machine state control must distinguish green disarmed from red active states");
 assert.match(indexSource, /id="serialRxRate"/);
 assert.match(indexSource, /id="serialTxRate"/);
 assert.match(indexSource, /id="serialTelemetryRate"/);

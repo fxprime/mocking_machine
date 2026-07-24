@@ -52,7 +52,13 @@
       </div>
       <div class="overview-status-layout">
         <div class="metric-grid overview-metrics">
-          <article class="metric"><span>Machine state</span><strong id="machineState">DISCONNECTED</strong></article>
+          <button id="machineStateControl" class="metric machine-state-control disconnected"
+                  type="button" aria-pressed="false"
+                  aria-label="Machine disconnected" disabled>
+            <span>Machine state</span>
+            <strong id="machineState" aria-live="polite">DISCONNECTED</strong>
+            <small id="machineStateAction">Connect to control output</small>
+          </button>
           <article class="metric driver-vin-metric">
             <span>Driver VIN</span>
             <strong><b id="supplyVoltage">0.00</b> V</strong>
@@ -101,9 +107,8 @@
         <div class="legend"><span class="desired-line">— Desired</span><span class="measured-line">— Measured</span></div>
       </article>
       <div class="action-row">
-        <button id="armButton" disabled>Arm output</button>
         <button id="runButton" class="primary" disabled>Run</button>
-        <span class="hint">Starting the data stream never starts the motor.</span>
+        <span class="hint">Use the Machine state badge to arm or disarm output. Starting the data stream never starts the motor.</span>
       </div>
     </section>
 
