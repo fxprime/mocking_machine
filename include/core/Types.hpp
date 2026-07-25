@@ -95,6 +95,7 @@ struct SafetyConfiguration {
   float encoder_timeout_velocity_rad_s = 1.0F;
   bool current_sense_enabled = false;
   bool driver_diagnostic_enabled = false;
+  bool jerk_limit_enabled = true;
 };
 
 struct SerialConfiguration {
@@ -208,7 +209,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 23;
+  static constexpr uint32_t kSchemaVersion = 24;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

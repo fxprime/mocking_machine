@@ -3,10 +3,12 @@ function clamp(value, minimum, maximum) {
 }
 
 export class JerkLimitedVelocityLimiter {
-  constructor(maximumVelocity, maximumAcceleration, maximumJerk) {
+  constructor(maximumVelocity, maximumAcceleration, maximumJerk,
+              jerkLimitEnabled = true) {
     this.maximumVelocity = maximumVelocity;
     this.maximumAcceleration = maximumAcceleration;
     this.maximumJerk = maximumJerk;
+    this.jerkLimitEnabled = jerkLimitEnabled;
     this.reset();
   }
 
@@ -21,7 +23,26 @@ export class JerkLimitedVelocityLimiter {
     if (!(elapsedSeconds > 0)) return this.velocity;
     const target = clamp(
         requestedTarget, -this.maximumVelocity, this.maximumVelocity);
-    if (!(this.maximumAcceleration > 0) || !(this.maximumJerk > 0)) {
+    if (!(this.maximumAcceleration > 0)) {
+      this.acceleration = 0;
+      this.previousTarget = target;
+      this.targetInitialized = true;
+      return this.velocity;
+    }
+    if (!this.jerkLimitEnabled) {
+      const previousVelocity = this.velocity;
+      const maximumVelocityChange =
+          this.maximumAcceleration * elapsedSeconds;
+      this.velocity += clamp(
+          target - this.velocity, -maximumVelocityChange,
+          maximumVelocityChange);
+      this.acceleration =
+          (this.velocity - previousVelocity) / elapsedSeconds;
+      this.previousTarget = target;
+      this.targetInitialized = true;
+      return this.velocity;
+    }
+    if (!(this.maximumJerk > 0)) {
       this.acceleration = 0;
       this.previousTarget = target;
       this.targetInitialized = true;

@@ -285,7 +285,8 @@ function handleMessage(id, data) {
       zeroIndexCalibrationTimeoutMs: data.byteLength >= 195 ? data.getUint32(191, true) : 120000,
       zeroIndexCalibrationReversalPauseMs: data.byteLength >= 197 ? data.getUint16(195, true) : 1000,
       zeroIndexCalibrationMaximumErrorTicks: data.byteLength >= 199 ? data.getUint16(197, true) : 2,
-      zeroIndexCalibrationSpeedRpm: data.byteLength >= 203 ? data.getFloat32(199, true) : 15
+      zeroIndexCalibrationSpeedRpm: data.byteLength >= 203 ? data.getFloat32(199, true) : 15,
+      jerkLimitEnabled: data.byteLength >= 204 ? data.getUint8(203) !== 0 : true
     };
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
     parameterDefinitions.rotorZeroOffsetTicks.max = Math.max(0, settings.cpr - 1);
@@ -1408,6 +1409,7 @@ const parameterDefinitions = {
   zeroIndexCalibrationReversalPauseMs: { id: 42, decimals: 0, step: 250, min: 250, max: 10000, description: "Stopped pause before reversal and minimum encoder-watchdog window while calibration motion starts" },
   zeroIndexCalibrationMaximumErrorTicks: { id: 43, decimals: 0, step: 1, min: 0, max: 1000, description: "Maximum permitted CPR interval error and edge-position jitter during calibration, in encoder ticks" },
   zeroIndexCalibrationSpeedRpm: { id: 44, decimals: 1, step: 1, min: 1, max: 120, description: "Closed-loop target speed used in both directions during automatic zero-index calibration, in RPM" },
+  jerkLimitEnabled: { id: 45, decimals: 0, step: 1, min: 0, max: 1, description: "Enable jerk limiting: 1 = smooth jerk-bounded acceleration, 0 = acceleration limiting only" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },
@@ -2143,7 +2145,8 @@ function constrainedProfilePreview() {
   const steps = 500;
   const dt = editingProfile.duration / steps;
   const vmax = Number(settings.vmax), amax = Number(settings.amax), jmax = Number(settings.jmax);
-  const limiter = new JerkLimitedVelocityLimiter(vmax, amax, jmax);
+  const limiter = new JerkLimitedVelocityLimiter(
+      vmax, amax, jmax, settings.jerkLimitEnabled !== false);
   for (let index = 0; index <= steps; index++) {
     const time = index * dt;
     const target = Math.min(vmax, Math.max(0, desiredProfileVelocity(time)));

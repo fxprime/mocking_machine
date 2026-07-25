@@ -39,7 +39,7 @@ Calibrate output-shaft CPR first, then tune the controller using recorded desire
 
 Incremental P, I, and D contributions accumulate into a saturated signed command. Integral contribution that would push an already saturated output farther into saturation is rejected. The VNH2SP30 driver then maps nonzero command magnitude through the characterized forward or reverse breakaway duty. Raw motor tests bypass this deadband mapping.
 
-The velocity motion limiter estimates the requested profile slope and uses a jerk-bounded switching trajectory to converge its velocity and acceleration states. Feasible constant-slope waypoint segments settle to their requested acceleration without repeatedly snapping acceleration to zero, preventing periodic ripple in the desired velocity while preserving the configured velocity, acceleration, and jerk limits in both directions.
+When jerk limiting is enabled, the velocity motion limiter estimates the requested profile slope and uses a jerk-bounded switching trajectory to converge its velocity and acceleration states. Feasible constant-slope waypoint segments settle to their requested acceleration without repeatedly snapping acceleration to zero, preventing periodic ripple in the desired velocity while preserving the configured velocity, acceleration, and jerk limits in both directions. Disabling jerk limiting bypasses the jerk-bounded trajectory but continues to enforce maximum velocity and acceleration.
 
 `estimator_min_counts`, `estimator_max_window_us`, and `estimator_stale_timeout_us` control Kalman
 measurement timing and the encoder samples used by method `2`. The windowed predictor stores each

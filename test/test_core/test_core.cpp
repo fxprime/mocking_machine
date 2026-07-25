@@ -175,16 +175,16 @@ void test_characterization_result_frame_crc_vector() {
       0xEA4BU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
-void test_settings_schema_23_frame_crc_vector() {
-  std::array<uint8_t, 8U + 203U> protected_bytes{};
+void test_settings_schema_24_frame_crc_vector() {
+  std::array<uint8_t, 8U + 204U> protected_bytes{};
   protected_bytes[0] = 1U;
   protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
   protected_bytes[3] = 0x01U;
   protected_bytes[4] = 0x34U;
   protected_bytes[5] = 0x12U;
-  protected_bytes[6] = 203U;
+  protected_bytes[6] = 204U;
   TEST_ASSERT_EQUAL_HEX16(
-      0x26FAU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+      0xC565U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
 void test_rotor_zero_calibration_frame_crc_vector() {
@@ -258,7 +258,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(23U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(24U, MachineSettings::kSchemaVersion);
 }
 
 void test_bearing_configuration_frame_crc_vector() {
@@ -424,6 +424,28 @@ void test_motion_limiter_tracks_feasible_ramp_without_ripple() {
     }
   }
   TEST_ASSERT_LESS_THAN_FLOAT(0.02F, maximum_settled_error);
+}
+
+void test_motion_limiter_can_disable_jerk_limit() {
+  SafetyConfiguration configuration{};
+  configuration.max_velocity_rad_s = 100.0F;
+  configuration.max_acceleration_rad_s2 = 10.0F;
+  configuration.max_jerk_rad_s3 = 20.0F;
+  configuration.jerk_limit_enabled = false;
+  MotionLimiter limiter;
+  limiter.configure(configuration);
+  limiter.reset();
+
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 1.0F, limiter.update(100.0F, 0.1F));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 10.0F, limiter.acceleration());
+
+  limiter.reset();
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -1.0F, limiter.update(-100.0F, 0.1F));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -10.0F, limiter.acceleration());
 }
 
 void test_velocity_estimator_uses_output_shaft_cpr() {
@@ -835,9 +857,10 @@ void test_driver_diagnostic_is_disabled_by_default() {
   const MachineSettings settings{};
   TEST_ASSERT_FALSE(settings.safety.driver_diagnostic_enabled);
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
+  TEST_ASSERT_TRUE(settings.safety.jerk_limit_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(23U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(24U, settings.schema_version);
   TEST_ASSERT_FALSE(settings.load_setting.broken_bearing);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
                           static_cast<uint8_t>(settings.velocity_estimator_method));
@@ -1006,7 +1029,7 @@ int main(int, char**) {
   RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
-  RUN_TEST(test_settings_schema_23_frame_crc_vector);
+  RUN_TEST(test_settings_schema_24_frame_crc_vector);
   RUN_TEST(test_bearing_configuration_frame_crc_vector);
   RUN_TEST(test_rotor_zero_calibration_frame_crc_vector);
   RUN_TEST(test_zero_index_hysteresis_calibration_frame_crc_vector);
@@ -1022,6 +1045,7 @@ int main(int, char**) {
   RUN_TEST(test_current_calibration_capture_averages_incrementally);
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
   RUN_TEST(test_motion_limiter_tracks_feasible_ramp_without_ripple);
+  RUN_TEST(test_motion_limiter_can_disable_jerk_limit);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
   RUN_TEST(test_velocity_estimator_predicts_from_characterized_motor_model);

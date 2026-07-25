@@ -83,7 +83,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0001` | [HEARTBEAT](#heartbeat-0x0001) | Device → host | 65 | Device identity, state, and health |
 | `0x0002` | [ACK](#ack-0x0002) | Device → host | 3 | Command result |
 | `0x0100` | [GET_SETTINGS](#get_settings-0x0100) | Host → device | 0 | Request current settings |
-| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 203 | Complete runtime settings snapshot |
+| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 204 | Complete runtime settings snapshot |
 | `0x0110` | [SET_CONTROLLER](#controller-gain-messages-0x0110-0x0114) | Host → device | 12 | Apply gains to RAM |
 | `0x0111` | [SET_DRIVER_DIAGNOSTIC](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable EN/DIAG protection |
 | `0x0112` | [SET_CURRENT_SENSE](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable overcurrent protection |
@@ -229,11 +229,12 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 178 | `zero_index_hysteresis_calibrated` | `u8` | `0`, `1` | Whether saved direction corrections came from a completed calibration |
 | 179 | `clockwise_rising_correction_ticks` | `i32` | encoder ticks | Directed correction applied to the CCW falling edge for reference side 0 |
 | 183 | `clockwise_falling_correction_ticks` | `i32` | encoder ticks | Directed correction applied to the CCW rising edge for reference side 1 |
-| 187 | `zero_index_calibration_duty` | `f32` | 0–1 | Legacy schema-22 calibration duty retained for compatibility; schema 23 does not use it for motion control |
+| 187 | `zero_index_calibration_duty` | `f32` | 0–1 | Legacy schema-22 calibration duty retained for compatibility; schema 23+ does not use it for motion control |
 | 191 | `zero_index_calibration_timeout_ms` | `u32` | ms | Maximum total calibration runtime |
 | 195 | `zero_index_calibration_reversal_pause_ms` | `u16` | ms | Stopped interval before reversing direction and minimum encoder-watchdog window while calibration motion starts |
 | 197 | `zero_index_calibration_maximum_error_ticks` | `u16` | encoder ticks | Maximum allowed CPR interval error and circular edge residual |
 | 199 | `zero_index_calibration_speed_rpm` | `f32` | RPM | Closed-loop speed magnitude used for both calibration directions; default 15 RPM |
+| 203 | `jerk_limit_enabled` | `u8` | `0`, `1` | Enables jerk-bounded motion limiting; zero retains velocity and acceleration limits only |
 
 The encoder watchdog starts when desired velocity first exceeds its configured threshold. Each valid quadrature transition refreshes activity. Dropping below the threshold or stopping resets the watchdog window.
 
@@ -726,11 +727,12 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 37 | `VELOCITY_ACCELERATION_WINDOW_SAMPLES` | samples | Method-2 circular history length; valid 2–32 |
 | 38 | `ROTOR_ZERO_OFFSET_TICKS` | encoder ticks | Wrapped index-to-user-zero distance; integer in `[0, counts_per_revolution)` |
 | 39 | `ZERO_INDEX_REFERENCE_SIDE` | `0`, `1` | 0 CW rising / CCW falling; 1 CW falling / CCW rising |
-| 40 | `ZERO_INDEX_CALIBRATION_DUTY` | 0–1 | Legacy schema-22 value retained for compatibility; ignored by schema-23 calibration motion |
+| 40 | `ZERO_INDEX_CALIBRATION_DUTY` | 0–1 | Legacy schema-22 value retained for compatibility; ignored by schema-23+ calibration motion |
 | 41 | `ZERO_INDEX_CALIBRATION_TIMEOUT_MS` | ms | Total calibration timeout; valid 10,000–600,000 |
 | 42 | `ZERO_INDEX_CALIBRATION_REVERSAL_PAUSE_MS` | ms | Stopped reversal pause; valid 250–10,000 |
 | 43 | `ZERO_INDEX_CALIBRATION_MAXIMUM_ERROR_TICKS` | encoder ticks | Maximum CPR interval error and edge jitter |
 | 44 | `ZERO_INDEX_CALIBRATION_SPEED_RPM` | RPM | Closed-loop calibration speed magnitude; valid 1–120 and limited by maximum velocity |
+| 45 | `JERK_LIMIT_ENABLED` | `0`, `1` | Enables jerk limiting; zero keeps acceleration limiting active |
 
 Lower current-filter cutoff reduces noise but delays software overcurrent detection. Hardware current limiting and a correctly sized fuse remain mandatory.
 
@@ -787,7 +789,7 @@ Structured settings, telemetry, profiles, calibration status, and most actuator 
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 23.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 24.
 
 | Settings schema | Change |
 |---:|---|
@@ -804,8 +806,9 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 21 | Added a persistent good/broken bearing condition to the shared rotor setup |
 | 22 | Added direction-aware Hall edges, reversible reference-side corrections, and guarded bidirectional hysteresis calibration |
 | 23 | Replaced fixed-duty Hall calibration motion with configurable bidirectional closed-loop RPM control |
+| 24 | Added a persistent jerk-limit enable switch; disabling it preserves velocity and acceleration limits |
 
-The current loader explicitly migrates valid schema 4–22 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-23 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–23 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Schema 23 migrates with jerk limiting enabled. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-24 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.
@@ -819,5 +822,6 @@ that schema enabled implicitly. Other older settings migrate to method `0`.
 - The schema-20 integer rotor-zero-offset `SETTINGS` field begins at byte 173.
 - The schema-22 zero-index hysteresis extension begins at byte 177.
 - The schema-23 closed-loop zero-index calibration speed begins at byte 199.
+- The schema-24 jerk-limit enable flag is byte 203.
 
 Message IDs, packed field order, fixed-array capacities, and CRC behavior are protocol contracts. Any change to them requires synchronized firmware, browser, tests, and this document.

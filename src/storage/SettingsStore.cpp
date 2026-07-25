@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 
@@ -35,6 +36,10 @@ struct PersistedSettings {
   MachineSettings payload{};
   uint16_t crc = 0;
 };
+
+static_assert(sizeof(SafetyConfiguration) == 44U &&
+                  offsetof(SafetyConfiguration, jerk_limit_enabled) == 42U,
+              "Schema-24 jerk flag must occupy schema-23 safety padding");
 
 struct LegacyControlConfigurationV5 {
   float kp;
@@ -970,6 +975,14 @@ bool SettingsStore::load(MachineSettings& settings) {
     if (valid_blob && current_schema) {
       settings = blob.payload;
       loaded = validate(settings);
+    } else if (valid_blob && blob.schema_version == 23U &&
+               blob.payload.schema_version == 23U) {
+      settings = blob.payload;
+      settings.schema_version = MachineSettings::kSchemaVersion;
+      settings.safety.jerk_limit_enabled = true;
+      loaded = validate(settings);
+      migrated = loaded;
+      migrated_bearing_value_is_valid = loaded;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV22)) {
     LegacyPersistedSettingsV22 blob{};

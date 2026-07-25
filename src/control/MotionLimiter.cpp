@@ -21,7 +21,26 @@ float MotionLimiter::update(float target, const float dt_s) {
   const float maximum_acceleration =
       configuration_.max_acceleration_rad_s2;
   const float maximum_jerk = configuration_.max_jerk_rad_s3;
-  if (!(maximum_acceleration > 0.0F) || !(maximum_jerk > 0.0F)) {
+  if (!(maximum_acceleration > 0.0F)) {
+    acceleration_rad_s2_ = 0.0F;
+    previous_target_velocity_rad_s_ = target;
+    target_initialized_ = true;
+    return velocity_rad_s_;
+  }
+  if (!configuration_.jerk_limit_enabled) {
+    const float previous_velocity = velocity_rad_s_;
+    const float maximum_velocity_change =
+        maximum_acceleration * dt_s;
+    velocity_rad_s_ += std::clamp(
+        target - velocity_rad_s_, -maximum_velocity_change,
+        maximum_velocity_change);
+    acceleration_rad_s2_ =
+        (velocity_rad_s_ - previous_velocity) / dt_s;
+    previous_target_velocity_rad_s_ = target;
+    target_initialized_ = true;
+    return velocity_rad_s_;
+  }
+  if (!(maximum_jerk > 0.0F)) {
     acceleration_rad_s2_ = 0.0F;
     previous_target_velocity_rad_s_ = target;
     target_initialized_ = true;

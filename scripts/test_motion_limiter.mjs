@@ -31,4 +31,16 @@ for (const direction of [1, -1]) {
       "preview must track a feasible ramp without periodic ripple");
 }
 
+const accelerationOnlyLimiter = new JerkLimitedVelocityLimiter(
+    maximumVelocity, maximumAcceleration, maximumJerk, false);
+assert.equal(
+    accelerationOnlyLimiter.update(maximumVelocity, 0.1), 1,
+    "disabled jerk limit must still enforce maximum acceleration");
+assert.equal(accelerationOnlyLimiter.acceleration, maximumAcceleration);
+accelerationOnlyLimiter.reset();
+assert.equal(
+    accelerationOnlyLimiter.update(-maximumVelocity, 0.1), -1,
+    "disabled jerk limit must preserve reverse acceleration");
+assert.equal(accelerationOnlyLimiter.acceleration, -maximumAcceleration);
+
 console.log("Jerk-limited motion preview tests passed");

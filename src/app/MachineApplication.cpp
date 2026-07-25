@@ -98,6 +98,7 @@ struct SettingsPayload {
   uint16_t zero_index_calibration_reversal_pause_ms;
   uint16_t zero_index_calibration_maximum_error_ticks;
   float zero_index_calibration_speed_rpm;
+  uint8_t jerk_limit_enabled;
 };
 
 struct TelemetryPayload {
@@ -193,6 +194,7 @@ enum class ParameterId : uint16_t {
   ZeroIndexCalibrationReversalPauseMs,
   ZeroIndexCalibrationMaximumErrorTicks,
   ZeroIndexCalibrationSpeedRpm,
+  JerkLimitEnabled,
 };
 
 struct ParameterPayload {
@@ -354,7 +356,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 203U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 204U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -1738,6 +1740,15 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.encoder.zero_index_calibration_speed_rpm =
               update.value;
           break;
+        case ParameterId::JerkLimitEnabled:
+          if (update.value != 0.0F && update.value != 1.0F) {
+            sendAck(frame.sequence, frame.message_id,
+                    ResultCode::InvalidValue);
+            return;
+          }
+          candidate.safety.jerk_limit_enabled =
+              update.value != 0.0F;
+          break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -2456,6 +2467,7 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.encoder.zero_index_calibration_reversal_pause_ms,
       settings_.encoder.zero_index_calibration_maximum_error_ticks,
       settings_.encoder.zero_index_calibration_speed_rpm,
+      static_cast<uint8_t>(settings_.safety.jerk_limit_enabled),
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }

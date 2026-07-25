@@ -112,6 +112,8 @@ assert.match(appSource, /zeroIndexClockwiseRisingCorrectionTicks:\s*data\.byteLe
   "GUI must decode the signed CW-rising/CCW-falling correction");
 assert.match(appSource, /zeroIndexCalibrationSpeedRpm:\s*data\.byteLength >= 203 \? data\.getFloat32\(199, true\) : 15/,
   "GUI must decode the schema-23 closed-loop calibration speed");
+assert.match(appSource, /jerkLimitEnabled:\s*data\.byteLength >= 204 \? data\.getUint8\(203\) !== 0 : true/,
+  "GUI must decode the schema-24 jerk-limit enable flag");
 assert.match(appSource, /velocityEstimatorMethod:\s*\{ id: 36,[\s\S]*0 = low-pass,[\s\S]*1 = characterized motor-model Kalman,[\s\S]*2 = encoder-window acceleration prediction/,
   "GUI must expose all three velocity-estimator methods through SET_PARAMETER");
 assert.match(appSource, /velocityAccelerationWindowSamples:\s*\{ id: 37,[\s\S]*Circular velocity-history length/,
