@@ -18,9 +18,10 @@ import { createVelocityStepSequence, encodeVelocityStepSequence } from "./veloci
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, GET_BEARING_CONFIGURATION: 0x0133, BEARING_CONFIGURATION: 0x0134, SET_BEARING_CONFIGURATION: 0x0135, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, GET_BEARING_CONFIGURATION: 0x0133, BEARING_CONFIGURATION: 0x0134, SET_BEARING_CONFIGURATION: 0x0135, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, ZERO_INDEX_HYSTERESIS_CALIBRATION: 0x0305, ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS: 0x0306, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const ROTOR_ZERO_CALIBRATION_ACTION = { CAPTURE: 0, SAVE: 1, CANCEL: 2, REQUEST_STATUS: 3 };
+const ZERO_INDEX_CALIBRATION_ACTION = { START: 0, SELECT_REFERENCE_SIDE: 1, SAVE: 2, CANCEL: 3, REQUEST_STATUS: 4 };
 const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
 const deviceSynchronizer = new DeviceSynchronizer();
@@ -72,6 +73,13 @@ let latestRotorReferenced = false;
 let rotorZeroCalibrationState = 0;
 let rotorZeroCalibrationCandidate = Number.NaN;
 let rotorZeroCalibrationPendingAction;
+let zeroIndexCalibrationStatus = {
+  stage: 0, clockwiseCount: 0, counterclockwiseCount: 0, referenceSide: 0,
+  candidateValid: false, lastResult: 0, clockwiseRisingCorrection: 0,
+  clockwiseFallingCorrection: 0, maximumResidual: 0
+};
+let zeroIndexCalibrationAction;
+let zeroIndexCalibrationPendingAction;
 let encoderCalibrationStartCount;
 let encoderCalibrationTurns;
 let encoderCalibrationCandidate;
@@ -258,19 +266,34 @@ function handleMessage(id, data) {
       motorModelEncoderNoiseCounts: data.byteLength >= 171 ? data.getFloat32(167, true) : 0.5,
       velocityEstimatorMethod: data.byteLength >= 172 ? data.getUint8(171) : 0,
       velocityAccelerationWindowSamples: data.byteLength >= 173 ? data.getUint8(172) : 5,
-      rotorZeroOffsetTicks: data.byteLength >= 177 ? data.getUint32(173, true) : 0
+      rotorZeroOffsetTicks: data.byteLength >= 177 ? data.getUint32(173, true) : 0,
+      zeroIndexReferenceSide: data.byteLength >= 178 ? data.getUint8(177) : 0,
+      zeroIndexHysteresisCalibrated: data.byteLength >= 179 ? data.getUint8(178) !== 0 : false,
+      zeroIndexClockwiseRisingCorrectionTicks: data.byteLength >= 183 ? data.getInt32(179, true) : 0,
+      zeroIndexClockwiseFallingCorrectionTicks: data.byteLength >= 187 ? data.getInt32(183, true) : 0,
+      zeroIndexCalibrationDuty: data.byteLength >= 191 ? data.getFloat32(187, true) : 0.10,
+      zeroIndexCalibrationTimeoutMs: data.byteLength >= 195 ? data.getUint32(191, true) : 120000,
+      zeroIndexCalibrationReversalPauseMs: data.byteLength >= 197 ? data.getUint16(195, true) : 1000,
+      zeroIndexCalibrationMaximumErrorTicks: data.byteLength >= 199 ? data.getUint16(197, true) : 2,
+      zeroIndexCalibrationSpeedRpm: data.byteLength >= 203 ? data.getFloat32(199, true) : 15
     };
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
     parameterDefinitions.rotorZeroOffsetTicks.max = Math.max(0, settings.cpr - 1);
+    parameterDefinitions.zeroIndexCalibrationSpeedRpm.max =
+        Math.min(120, settings.vmax / 0.10471975511965977);
+    parameterDefinitions.zeroIndexCalibrationMaximumErrorTicks.max =
+        Math.min(1000, Math.max(0, settings.cpr - 1));
     if (runtimeProfileId === undefined) runtimeProfileId = settings.profileId;
     rotorVisualState = undefined;
     renderSettings();
     renderEncoderCalibration();
     renderRotorZeroCalibration();
+    renderZeroIndexCalibration();
     renderProfiles();
     renderRunProfileDialog();
     sendCurrentCalibrationCommand(CURRENT_CALIBRATION_ACTION.REQUEST_STATUS);
     sendRotorZeroCalibrationCommand(ROTOR_ZERO_CALIBRATION_ACTION.REQUEST_STATUS);
+    sendZeroIndexCalibrationCommand(ZERO_INDEX_CALIBRATION_ACTION.REQUEST_STATUS);
   } else if (id === MSG.PROFILE_CONFIGURATION) {
     const profile = decodeProfile(data);
     const existing = profiles.findIndex(item => item.id === profile.id);
@@ -343,6 +366,21 @@ function handleMessage(id, data) {
         : Number.NaN;
     settings.rotorZeroOffsetTicks = data.getUint32(11, true);
     renderRotorZeroCalibration();
+  } else if (id === MSG.ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS) {
+    zeroIndexCalibrationStatus = {
+      stage: data.getUint8(0),
+      clockwiseCount: data.getUint8(1),
+      counterclockwiseCount: data.getUint8(2),
+      referenceSide: data.getUint8(3),
+      candidateValid: data.getUint8(4) !== 0,
+      lastResult: data.getUint8(5),
+      clockwiseRisingCorrection: data.getInt32(6, true),
+      clockwiseFallingCorrection: data.getInt32(10, true),
+      maximumResidual: data.getUint16(14, true),
+      currentPosition: data.getFloat32(16, true)
+    };
+    $("zeroIndexReferenceSide").value = String(zeroIndexCalibrationStatus.referenceSide);
+    renderZeroIndexCalibration();
   } else if (id === MSG.ACK) {
     const request = data.getUint16(0, true);
     const result = data.getUint8(2);
@@ -461,6 +499,42 @@ function handleMessage(id, data) {
         toast("Rotor zero candidate discarded.");
       }
       renderRotorZeroCalibration();
+      return;
+    }
+    if (request === MSG.ZERO_INDEX_HYSTERESIS_CALIBRATION) {
+      const action = zeroIndexCalibrationPendingAction;
+      zeroIndexCalibrationPendingAction = undefined;
+      zeroIndexCalibrationAction = undefined;
+      if (result !== 0) {
+        toast(`Zero-index calibration rejected: ${resultDescription(result)}.`);
+      } else if (action === ZERO_INDEX_CALIBRATION_ACTION.START) {
+        toast("Zero-index calibration started clockwise. Keep the guard closed.");
+      } else if (action === ZERO_INDEX_CALIBRATION_ACTION.SELECT_REFERENCE_SIDE) {
+        toast("Temporary reference side changed. Rotate by hand in both directions to verify zero.");
+      } else if (action === ZERO_INDEX_CALIBRATION_ACTION.SAVE) {
+        toast("Zero-index hysteresis calibration applied and saved.");
+      } else if (action === ZERO_INDEX_CALIBRATION_ACTION.CANCEL) {
+        toast("Zero-index calibration cancelled; saved values restored.");
+      }
+      renderZeroIndexCalibration();
+      return;
+    }
+    if (request === MSG.ARM && zeroIndexCalibrationAction?.stage === "arm") {
+      if (result === 0) {
+        zeroIndexCalibrationAction.stage = "start";
+        sendZeroIndexCalibrationCommand(
+          ZERO_INDEX_CALIBRATION_ACTION.START,
+          zeroIndexCalibrationAction.referenceSide
+        ).catch(error => {
+          zeroIndexCalibrationAction = undefined;
+          renderZeroIndexCalibration();
+          toast(`Could not start zero-index calibration: ${error.message}`);
+        });
+      } else {
+        zeroIndexCalibrationAction = undefined;
+        toast(`Could not arm zero-index calibration: ${resultDescription(result)}.`);
+        renderZeroIndexCalibration();
+      }
       return;
     }
     if (request === MSG.ARM && currentCalibrationDriveArmPending) {
@@ -837,13 +911,14 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; recordedBrokenBearing = false; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; brokenBearing = false; brokenBearingSaved = false; bearingSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; recordedBrokenBearing = false; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; brokenBearing = false; brokenBearingSaved = false; bearingSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; zeroIndexCalibrationStatus = { stage: 0, clockwiseCount: 0, counterclockwiseCount: 0, referenceSide: 0, candidateValid: false, lastResult: 0, clockwiseRisingCorrection: 0, clockwiseFallingCorrection: 0, maximumResidual: 0 }; zeroIndexCalibrationAction = undefined; zeroIndexCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderMachineStateControl();
   updateExportButton();
   renderRunProfileDialog();
   renderRotorLoadSetup();
   renderEncoderCalibration();
   renderRotorZeroCalibration();
+  renderZeroIndexCalibration();
 }
 
 function resetCommunicationDisplay(isConnected) {
@@ -1050,6 +1125,7 @@ function renderTelemetry(sample) {
       : "Waiting for zero index";
   renderEncoderCalibration();
   renderRotorZeroCalibration();
+  renderZeroIndexCalibration();
   updateState(sample.state, sample.faults);
 }
 
@@ -1231,9 +1307,15 @@ function finalizeTuningResponse(faulted = false) {
     return;
   }
   updateStepEstimate();
-  const peak = Math.max(...tuningSamples.map(sample => sample.measured));
+  const responseDirection = tuningTargetVelocity !== 0
+    ? Math.sign(tuningTargetVelocity)
+    : Math.sign(tuningSamples.reduce(
+        (sum, sample) => sum + sample.desired, 0)) || 1;
+  const peak = responseDirection < 0
+    ? Math.min(...tuningSamples.map(sample => sample.measured))
+    : Math.max(...tuningSamples.map(sample => sample.measured));
   $("tuningPeakVelocity").textContent = formatNumber(peak, 2);
-  if (tuningTestMode !== "manual" || !(tuningTargetVelocity > 0)) {
+  if (tuningTestMode !== "manual" || tuningTargetVelocity === 0) {
     $("tuningOvershoot").textContent = "—"; $("tuningRiseTime").textContent = "—"; $("tuningSettlingTime").textContent = "—";
     const completeMessage = tuningTestMode === "manual-sequence"
       ? "Random step sequence captured; review tracking and the frequency-domain estimate."
@@ -1302,7 +1384,7 @@ const parameterDefinitions = {
   encoderTimeoutVelocity: { id: 23, decimals: 2, step: 0.1, min: 0.1, max: 10000, description: "Desired-velocity threshold that activates the encoder activity watchdog, in rad/s" },
   currentSenseEnabled: { id: 28, decimals: 0, step: 1, min: 0, max: 1, description: "Enable current protection: 0 = disabled, 1 = enabled" },
   currentFilterCutoffHz: { id: 29, decimals: 1, step: 0.1, min: 0.1, max: 200, description: "First-order current-sense low-pass cutoff in Hz; lower values reduce noise but delay overcurrent detection" },
-  zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between zero-index rising edges in microseconds; closer edges are counted as bounce" },
+  zeroIndexMinIntervalUs: { id: 30, decimals: 0, step: 100, min: 100, max: 1000000, description: "Minimum accepted interval between same-polarity zero-index edges in microseconds; closer edges are counted as bounce" },
   zeroIndexCorrectionGain: { id: 31, decimals: 3, step: 0.01, min: 0, max: 1, description: "Fraction of zero-index phase error corrected per accepted pulse; 0 trusts encoder counts only after initial reference, 1 snaps fully to every pulse" },
   zeroIndexMinSeparationRevolutions: { id: 32, decimals: 2, step: 0.05, min: 0, max: 0.95, description: "Minimum rotor travel in revolutions before another zero edge can be accepted; 0 disables the encoder-distance bounce filter" },
   characterizationDynamicsCutoffHz: { id: 33, decimals: 1, step: 0.5, min: 0.5, max: 100, description: "Low-pass cutoff used before calculating characterization acceleration and jerk" },
@@ -1311,6 +1393,11 @@ const parameterDefinitions = {
   velocityEstimatorMethod: { id: 36, decimals: 0, step: 1, min: 0, max: 2, description: "Velocity estimator: 0 = low-pass, 1 = characterized motor-model Kalman, 2 = encoder-window acceleration prediction" },
   velocityAccelerationWindowSamples: { id: 37, decimals: 0, step: 1, min: 2, max: 32, description: "Circular velocity-history length used by estimator method 2; larger windows reduce acceleration noise but add lag" },
   rotorZeroOffsetTicks: { id: 38, decimals: 0, step: 1, min: 0, max: 999999, description: "Wrapped encoder-tick distance from the accepted zero-index pulse to the user zero point" },
+  zeroIndexReferenceSide: { id: 39, decimals: 0, step: 1, min: 0, max: 1, description: "Direction-aware reference side: 0 = CW rising / CCW falling, 1 = CW falling / CCW rising" },
+  zeroIndexCalibrationTimeoutMs: { id: 41, decimals: 0, step: 1000, min: 10000, max: 600000, description: "Maximum total automatic zero-index calibration time in milliseconds" },
+  zeroIndexCalibrationReversalPauseMs: { id: 42, decimals: 0, step: 250, min: 250, max: 10000, description: "Stopped pause before reversal and minimum encoder-watchdog window while calibration motion starts" },
+  zeroIndexCalibrationMaximumErrorTicks: { id: 43, decimals: 0, step: 1, min: 0, max: 1000, description: "Maximum permitted CPR interval error and edge-position jitter during calibration, in encoder ticks" },
+  zeroIndexCalibrationSpeedRpm: { id: 44, decimals: 1, step: 1, min: 1, max: 120, description: "Closed-loop target speed used in both directions during automatic zero-index calibration, in RPM" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },
@@ -1422,6 +1509,100 @@ async function sendRotorZeroCalibrationCommand(action) {
     rotorZeroCalibrationPendingAction = undefined;
     renderRotorZeroCalibration();
     toast(`Could not send rotor zero calibration: ${error.message}`);
+  }
+}
+
+async function sendZeroIndexCalibrationCommand(
+  action, referenceSide = Number($("zeroIndexReferenceSide").value) || 0
+) {
+  if (!connected || zeroIndexCalibrationPendingAction !== undefined) return;
+  zeroIndexCalibrationPendingAction = action;
+  renderZeroIndexCalibration();
+  try {
+    await sendFrame(
+      MSG.ZERO_INDEX_HYSTERESIS_CALIBRATION,
+      Uint8Array.of(action, referenceSide)
+    );
+  } catch (error) {
+    zeroIndexCalibrationPendingAction = undefined;
+    zeroIndexCalibrationAction = undefined;
+    renderZeroIndexCalibration();
+    toast(`Could not send zero-index calibration command: ${error.message}`);
+    throw error;
+  }
+}
+
+async function startZeroIndexCalibration() {
+  if (!connected || latestState !== 0 || zeroIndexCalibrationStatus.stage !== 0) return;
+  if (!await confirmSafety("Automatic zero-index calibration rotates five slow revolutions clockwise and five counterclockwise. Remove imbalance weights, close the guard, verify the configured calibration speed, and keep the emergency stop accessible.")) return;
+  zeroIndexCalibrationAction = {
+    stage: "arm",
+    referenceSide: Number($("zeroIndexReferenceSide").value) || 0
+  };
+  renderZeroIndexCalibration();
+  try {
+    await sendFrame(MSG.ARM);
+  } catch (error) {
+    zeroIndexCalibrationAction = undefined;
+    renderZeroIndexCalibration();
+    toast(`Could not request calibration arm: ${error.message}`);
+  }
+}
+
+function renderZeroIndexCalibration() {
+  const status = zeroIndexCalibrationStatus;
+  const pending = zeroIndexCalibrationPendingAction !== undefined ||
+                  zeroIndexCalibrationAction !== undefined;
+  const verifying = status.stage === 4 && status.candidateValid;
+  const active = status.stage >= 1 && status.stage <= 3;
+  $("zeroIndexClockwisePasses").textContent = `${status.clockwiseCount}/5`;
+  $("zeroIndexCounterclockwisePasses").textContent =
+      `${status.counterclockwiseCount}/5`;
+  $("zeroIndexRisingCorrection").textContent =
+      String(status.clockwiseRisingCorrection);
+  $("zeroIndexFallingCorrection").textContent =
+      String(status.clockwiseFallingCorrection);
+  $("zeroIndexMaximumResidual").textContent =
+      `${status.maximumResidual} ticks`;
+  $("zeroIndexCalibrationValidity").textContent =
+      settings.zeroIndexHysteresisCalibrated ? "Saved" : "Not calibrated";
+  $("zeroIndexVerificationPosition").textContent =
+      Number.isFinite(latestRotorPosition) ? `${latestRotorPosition.toFixed(1)}°` : "—";
+  $("zeroIndexReferenceSide").disabled = pending || active;
+  $("startZeroIndexCalibration").disabled =
+      !connected || latestState !== 0 || status.stage !== 0 || pending;
+  $("cancelZeroIndexCalibration").disabled =
+      !connected || (!active && !verifying) || pending;
+  $("saveZeroIndexCalibration").disabled =
+      !connected || !verifying || pending;
+  $("zeroIndexCalibrationCandidate").classList.toggle("hidden", !verifying);
+
+  const badge = $("zeroIndexCalibrationState");
+  const labels = {
+    1: ["● Calibrating CW", "online"],
+    2: ["● Reversal pause", "offline"],
+    3: ["● Calibrating CCW", "online"],
+    4: ["● Verify manually", "online"]
+  };
+  if (!connected) {
+    badge.textContent = "● Disconnected";
+    badge.className = "status-badge offline";
+  } else if (pending) {
+    badge.textContent = "● Sending…";
+    badge.className = "status-badge offline";
+  } else if (labels[status.stage]) {
+    badge.textContent = labels[status.stage][0];
+    badge.className = `status-badge ${labels[status.stage][1]}`;
+  } else if (status.lastResult !== 0) {
+    badge.textContent = "▲ Calibration rejected";
+    badge.className = "status-badge fault";
+  } else {
+    badge.textContent = settings.zeroIndexHysteresisCalibrated
+      ? "✓ Calibrated"
+      : "● Ready";
+    badge.className = `status-badge ${
+      settings.zeroIndexHysteresisCalibrated ? "online" : "offline"
+    }`;
   }
 }
 
@@ -2068,6 +2249,7 @@ async function startTuningResponseTest() {
     if (!profiles.some(profile => profile.id === action.profileId)) return toast("Select a valid stored profile.");
   } else {
     action.pattern = $("tuningManualPattern").value;
+    action.direction = Number($("tuningManualDirection").value);
     if (action.pattern === "random") {
       try {
         action.sequence = refreshTuningVelocitySequence();
@@ -2075,9 +2257,13 @@ async function startTuningResponseTest() {
         return toast(error.message);
       }
     } else {
-      action.velocity = Number($("tuningManualVelocity").value);
+      action.velocity =
+          action.direction * Number($("tuningManualVelocity").value);
       action.duration = Number($("tuningManualDuration").value);
-      if (!(action.velocity > 0 && action.velocity <= Number(settings.vmax))) return toast(`Manual velocity must be between 0 and ${formatNumber(settings.vmax, 2)} rad/s.`);
+      if (!(Math.abs(action.velocity) > 0 &&
+            Math.abs(action.velocity) <= Number(settings.vmax))) {
+        return toast(`Manual speed magnitude must be between 0 and ${formatNumber(settings.vmax, 2)} rad/s.`);
+      }
       if (!(action.duration >= 0.1 && action.duration <= 3600)) return toast("Test duration must be between 0.1 and 3600 seconds.");
     }
   }
@@ -2744,6 +2930,7 @@ function refreshTuningVelocitySequence(newSeed = false) {
     levelCount: Number($("tuningRandomLevels").value),
     holdSeconds: $("tuningRandomHold").value,
     velocityLimit: Number(settings.vmax) || 150,
+    direction: Number($("tuningManualDirection").value),
     seed: tuningVelocitySequenceSeed
   });
   $("tuningSequencePreview").textContent =
@@ -2766,6 +2953,15 @@ document.querySelectorAll('input[name="tuningTestMode"]').forEach(input => input
 }));
 renderTuningTestInputMode(document.querySelector('input[name="tuningTestMode"]:checked').value);
 $("tuningManualPattern").addEventListener("change", renderManualPattern);
+$("tuningManualDirection").addEventListener("change", () => {
+  if ($("tuningManualPattern").value === "random") {
+    try {
+      refreshTuningVelocitySequence();
+    } catch (error) {
+      $("tuningSequencePreview").textContent = error.message;
+    }
+  }
+});
 for (const id of ["tuningRandomMinimum", "tuningRandomMaximum", "tuningRandomLevels", "tuningRandomHold"]) {
   $(id).addEventListener("change", () => {
     try { refreshTuningVelocitySequence(); } catch (error) { $("tuningSequencePreview").textContent = error.message; }
@@ -2786,6 +2982,18 @@ $("startEncoderCalibration").addEventListener("click", startEncoderCalibrationMe
 $("finishEncoderCalibration").addEventListener("click", finishEncoderCalibrationMeasurement);
 $("cancelEncoderCalibration").addEventListener("click", () => resetEncoderCalibration("● Measurement discarded"));
 $("saveEncoderCalibration").addEventListener("click", saveEncoderCalibrationResult);
+$("startZeroIndexCalibration").addEventListener("click", startZeroIndexCalibration);
+$("cancelZeroIndexCalibration").addEventListener("click", () =>
+  sendZeroIndexCalibrationCommand(ZERO_INDEX_CALIBRATION_ACTION.CANCEL));
+$("saveZeroIndexCalibration").addEventListener("click", () =>
+  sendZeroIndexCalibrationCommand(ZERO_INDEX_CALIBRATION_ACTION.SAVE));
+$("zeroIndexReferenceSide").addEventListener("change", event =>
+  zeroIndexCalibrationStatus.stage === 4
+    ? sendZeroIndexCalibrationCommand(
+        ZERO_INDEX_CALIBRATION_ACTION.SELECT_REFERENCE_SIDE,
+        Number(event.target.value)
+      )
+    : undefined);
 $("captureRotorZero").addEventListener("click", () =>
   sendRotorZeroCalibrationCommand(ROTOR_ZERO_CALIBRATION_ACTION.CAPTURE));
 $("discardRotorZero").addEventListener("click", () =>

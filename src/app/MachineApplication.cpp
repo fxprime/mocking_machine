@@ -89,6 +89,15 @@ struct SettingsPayload {
   uint8_t velocity_estimator_method;
   uint8_t velocity_acceleration_window_samples;
   uint32_t rotor_zero_offset_ticks;
+  uint8_t zero_index_reference_side;
+  uint8_t zero_index_hysteresis_calibrated;
+  int32_t clockwise_rising_correction_ticks;
+  int32_t clockwise_falling_correction_ticks;
+  float zero_index_calibration_duty;
+  uint32_t zero_index_calibration_timeout_ms;
+  uint16_t zero_index_calibration_reversal_pause_ms;
+  uint16_t zero_index_calibration_maximum_error_ticks;
+  float zero_index_calibration_speed_rpm;
 };
 
 struct TelemetryPayload {
@@ -178,6 +187,12 @@ enum class ParameterId : uint16_t {
   VelocityEstimatorMethod,
   VelocityAccelerationWindowSamples,
   RotorZeroOffsetTicks,
+  ZeroIndexReferenceSide,
+  ZeroIndexCalibrationDuty,
+  ZeroIndexCalibrationTimeoutMs,
+  ZeroIndexCalibrationReversalPauseMs,
+  ZeroIndexCalibrationMaximumErrorTicks,
+  ZeroIndexCalibrationSpeedRpm,
 };
 
 struct ParameterPayload {
@@ -276,6 +291,32 @@ struct RotorZeroCalibrationStatusPayload {
   uint32_t saved_offset_ticks;
 };
 
+enum class ZeroIndexHysteresisCalibrationAction : uint8_t {
+  Start = 0,
+  SelectReferenceSide = 1,
+  Save = 2,
+  Cancel = 3,
+  RequestStatus = 4,
+};
+
+struct ZeroIndexHysteresisCalibrationPayload {
+  uint8_t action;
+  uint8_t reference_side;
+};
+
+struct ZeroIndexHysteresisCalibrationStatusPayload {
+  uint8_t stage;
+  uint8_t clockwise_count;
+  uint8_t counterclockwise_count;
+  uint8_t reference_side;
+  uint8_t candidate_valid;
+  uint8_t last_result;
+  int32_t clockwise_rising_correction_ticks;
+  int32_t clockwise_falling_correction_ticks;
+  uint16_t maximum_residual_ticks;
+  float current_position_deg;
+};
+
 struct SupplyVoltageCalibrationPayload {
   float reference_voltage_v;
 };
@@ -313,7 +354,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 177U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 203U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -322,6 +363,10 @@ static_assert(sizeof(RotorZeroCalibrationPayload) == 1U,
               "Rotor-zero calibration command payload changed");
 static_assert(sizeof(RotorZeroCalibrationStatusPayload) == 15U,
               "Rotor-zero calibration status payload changed");
+static_assert(sizeof(ZeroIndexHysteresisCalibrationPayload) == 2U,
+              "Zero-index hysteresis calibration command payload changed");
+static_assert(sizeof(ZeroIndexHysteresisCalibrationStatusPayload) == 20U,
+              "Zero-index hysteresis calibration status payload changed");
 static_assert(sizeof(TelemetryPayload) == 84U, "Update protocol and browser TELEMETRY decoder");
 static_assert(sizeof(SupplyVoltageCalibrationPayload) == 4U,
               "Supply calibration payload must remain one float");
@@ -372,6 +417,15 @@ void MachineApplication::configureVelocityController() {
   controller_.configure(configuration);
 }
 
+void MachineApplication::configureZeroIndexSensor() {
+  zero_index_.configureDirectionSelection(
+      settings_.encoder.direction,
+      static_cast<ZeroIndexReferenceSide>(
+          settings_.encoder.zero_index_reference_side),
+      settings_.encoder.clockwise_rising_correction_ticks,
+      settings_.encoder.clockwise_falling_correction_ticks);
+}
+
 void MachineApplication::begin() {
   const bool loaded = settings_store_.load(settings_);
   runtime_profile_id_ = settings_.selected_profile_id;
@@ -390,6 +444,7 @@ void MachineApplication::begin() {
                     zeroIndexMinimumSeparationCounts(
                         settings_.encoder.counts_per_output_revolution,
                         settings_.encoder.zero_index_minimum_separation_revolutions));
+  configureZeroIndexSensor();
   rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                  settings_.encoder.direction,
                                  settings_.encoder.zero_index_correction_gain,
@@ -428,6 +483,8 @@ void MachineApplication::runOnce() {
     if (lateness_us > static_cast<uint64_t>(settings_.control.period_us) * 2ULL) {
       const bool motor_output_active = state_ == RunState::Running ||
           characterization_stage_ != CharacterizationStage::Idle ||
+          (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
+           zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
           (state_ == RunState::Armed && manual_command_expiry_us_ > now);
       if (motor_output_active) {
         faults_ |= FaultControlOverrun;
@@ -482,6 +539,10 @@ void MachineApplication::runOnce() {
     rotor_zero_calibration_status_pending_ =
         !sendRotorZeroCalibrationStatus(transmit_sequence_++);
   }
+  if (zero_index_calibration_status_pending_) {
+    zero_index_calibration_status_pending_ =
+        !sendZeroIndexHysteresisCalibrationStatus(transmit_sequence_++);
+  }
   serial_link_.serviceTx();
 }
 
@@ -490,6 +551,7 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   last_control_us_ = scheduled_us;
   telemetry_.timestamp_us = scheduled_us;
   const ZeroIndexCapture zero_capture = zero_index_.snapshot();
+  updateZeroIndexHysteresisCalibration(scheduled_us, zero_capture);
   telemetry_.encoder_count = encoder_.count();
   telemetry_.last_zero_timestamp_us = zero_capture.timestamp_us;
   telemetry_.last_zero_encoder_count = zero_capture.encoder_count;
@@ -518,7 +580,35 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
   telemetry_.controller_integral_term = 0.0F;
   telemetry_.controller_derivative_term = 0.0F;
 
-  if (characterization_stage_ != CharacterizationStage::Idle && faults_ == FaultNone) {
+  if ((zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Clockwise ||
+       zero_index_calibration_stage_ ==
+           ZeroIndexCalibrationStage::Counterclockwise) &&
+      faults_ == FaultNone) {
+    const int8_t direction =
+        zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Clockwise
+            ? 1
+            : -1;
+    telemetry_.desired_velocity_rad_s =
+        zeroIndexCalibrationTargetVelocityRadS(
+            direction,
+            settings_.encoder.zero_index_calibration_speed_rpm);
+    telemetry_.controller_output = controller_.update(
+        telemetry_.desired_velocity_rad_s,
+        telemetry_.measured_velocity_rad_s, dt_s);
+    telemetry_.controller_proportional_term =
+        controller_.proportionalTerm();
+    telemetry_.controller_integral_term = controller_.integralTerm();
+    telemetry_.controller_derivative_term =
+        controller_.derivativeTerm();
+    motor_.command(telemetry_.controller_output);
+  } else if (zero_index_calibration_stage_ ==
+                 ZeroIndexCalibrationStage::PauseBeforeCounterclockwise &&
+             faults_ == FaultNone) {
+    telemetry_.desired_velocity_rad_s = 0.0F;
+    telemetry_.controller_output = 0.0F;
+    motor_.stop();
+  } else if (characterization_stage_ != CharacterizationStage::Idle &&
+             faults_ == FaultNone) {
     updateCharacterization(scheduled_us);
     telemetry_.desired_velocity_rad_s = 0.0F;
     telemetry_.controller_output = motor_.appliedDuty();
@@ -528,7 +618,8 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
                                  ? velocity_step_sequence_.target(scheduled_us)
                                  : profile_.target(scheduled_us);
     telemetry_.desired_velocity_rad_s = motion_limiter_.update(raw_target, dt_s);
-    if (telemetry_.desired_velocity_rad_s > 0.0F) {
+    if (velocityControlDemandActive(
+            telemetry_.desired_velocity_rad_s)) {
       telemetry_.controller_output = controller_.update(
           telemetry_.desired_velocity_rad_s, telemetry_.measured_velocity_rad_s, dt_s);
       telemetry_.controller_proportional_term = controller_.proportionalTerm();
@@ -570,8 +661,14 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
 }
 
 void MachineApplication::updateSafety(const uint64_t timestamp_us, const float current_a) {
+  const bool zero_index_calibration_motion =
+      zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Clockwise ||
+      zero_index_calibration_stage_ ==
+          ZeroIndexCalibrationStage::Counterclockwise;
   const bool motor_output_active = state_ == RunState::Running ||
       characterization_stage_ != CharacterizationStage::Idle ||
+      (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
+       zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
       (state_ == RunState::Armed && manual_command_expiry_us_ > timestamp_us);
   if (motor_.diagnosticFault()) {
     faults_ |= FaultDriverDiagnostic;
@@ -591,9 +688,16 @@ void MachineApplication::updateSafety(const uint64_t timestamp_us, const float c
   }
   if (encoder_watchdog_.update(
           timestamp_us, telemetry_.desired_velocity_rad_s,
-          encoder_.lastEdgeTimestampUs(), state_ == RunState::Running,
-          settings_.safety.encoder_timeout_ms,
-          settings_.safety.encoder_timeout_velocity_rad_s)) {
+          encoder_.lastEdgeTimestampUs(),
+          state_ == RunState::Running || zero_index_calibration_motion,
+          zero_index_calibration_motion
+              ? zeroIndexCalibrationEncoderTimeoutMs(
+                    settings_.safety.encoder_timeout_ms,
+                    settings_.encoder
+                        .zero_index_calibration_reversal_pause_ms)
+              : settings_.safety.encoder_timeout_ms,
+          settings_.safety.encoder_timeout_velocity_rad_s,
+          zero_index_calibration_motion)) {
     faults_ |= FaultEncoderTimeout;
   }
   if (faults_ != FaultNone && state_ != RunState::Fault) {
@@ -615,6 +719,13 @@ void MachineApplication::transitionToStopped() {
     characterization_status_pending_ = true;
   }
   characterization_stage_ = CharacterizationStage::Idle;
+  if (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
+    zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Idle;
+    zero_index_hysteresis_candidate_valid_ = false;
+    zero_index_calibration_pending_falling_ = false;
+    zero_index_calibration_status_pending_ = true;
+    configureZeroIndexSensor();
+  }
   motor_.stop();
   if (state_ != RunState::Fault) {
     state_ = RunState::Disarmed;
@@ -655,6 +766,182 @@ void MachineApplication::updateCurrentCalibrationCapture(
   }
   current_calibration_capture_point_ = 0U;
   current_calibration_status_pending_ = true;
+}
+
+void MachineApplication::processZeroIndexCalibrationEdge(
+    const ZeroIndexEdgeCapture& capture, const ZeroIndexEdge edge) {
+  if (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Clockwise &&
+      zero_index_calibration_stage_ !=
+          ZeroIndexCalibrationStage::Counterclockwise) {
+    return;
+  }
+  const int8_t directed_rotation =
+      zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Clockwise
+          ? 1
+          : -1;
+  if (capture.directed_rotation != directed_rotation) {
+    zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Idle;
+    zero_index_hysteresis_candidate_valid_ = false;
+    zero_index_calibration_last_result_ =
+        protocol::ResultCode::InvalidValue;
+    zero_index_calibration_pending_falling_ = false;
+    motor_.stop();
+    controller_.reset();
+    motion_limiter_.reset();
+    encoder_watchdog_.reset();
+    state_ = RunState::Disarmed;
+    configureZeroIndexSensor();
+    zero_index_calibration_status_pending_ = true;
+    return;
+  }
+  if (edge == ZeroIndexEdge::Falling) {
+    zero_index_calibration_pending_falling_count_ = capture.encoder_count;
+    zero_index_calibration_pending_falling_ = true;
+    return;
+  }
+  if (!zero_index_calibration_pending_falling_) {
+    return;
+  }
+  const bool accepted = zero_index_hysteresis_calibration_.addPass(
+      directed_rotation, capture.encoder_count,
+      zero_index_calibration_pending_falling_count_);
+  zero_index_calibration_pending_falling_ = false;
+  if (!accepted) {
+    zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Idle;
+    zero_index_hysteresis_candidate_valid_ = false;
+    zero_index_calibration_last_result_ = protocol::ResultCode::InvalidValue;
+    motor_.stop();
+    controller_.reset();
+    motion_limiter_.reset();
+    encoder_watchdog_.reset();
+    state_ = RunState::Disarmed;
+    configureZeroIndexSensor();
+    zero_index_calibration_status_pending_ = true;
+    return;
+  }
+  zero_index_calibration_status_pending_ = true;
+  if (directed_rotation > 0 &&
+      zero_index_hysteresis_calibration_.clockwiseCount() ==
+          ZeroIndexHysteresisCalibration::kRequiredPasses) {
+    zero_index_calibration_stage_ =
+        ZeroIndexCalibrationStage::PauseBeforeCounterclockwise;
+    zero_index_calibration_deadline_us_ = telemetry_.timestamp_us +
+        static_cast<uint64_t>(
+            settings_.encoder.zero_index_calibration_reversal_pause_ms) *
+            1000ULL;
+    motor_.stop();
+    controller_.reset();
+    motion_limiter_.reset();
+    encoder_watchdog_.reset();
+    return;
+  }
+  if (directed_rotation < 0 &&
+      zero_index_hysteresis_calibration_.counterclockwiseCount() ==
+          ZeroIndexHysteresisCalibration::kRequiredPasses) {
+    ZeroIndexHysteresisResult candidate{};
+    if (!zero_index_hysteresis_calibration_.result(candidate)) {
+      zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Idle;
+      zero_index_hysteresis_candidate_valid_ = false;
+      zero_index_calibration_last_result_ = protocol::ResultCode::InvalidValue;
+      configureZeroIndexSensor();
+    } else {
+      zero_index_hysteresis_candidate_ = candidate;
+      zero_index_hysteresis_candidate_valid_ = true;
+      zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Verify;
+      zero_index_calibration_last_result_ = protocol::ResultCode::Ok;
+      zero_index_.configureDirectionSelection(
+          settings_.encoder.direction,
+          static_cast<ZeroIndexReferenceSide>(
+              zero_index_candidate_reference_side_),
+          candidate.clockwise_rising_correction_ticks,
+          candidate.clockwise_falling_correction_ticks);
+    }
+    motor_.stop();
+    controller_.reset();
+    motion_limiter_.reset();
+    encoder_watchdog_.reset();
+    state_ = RunState::Disarmed;
+    zero_index_calibration_status_pending_ = true;
+  }
+}
+
+void MachineApplication::updateZeroIndexHysteresisCalibration(
+    const uint64_t scheduled_us, const ZeroIndexCapture& zero_capture) {
+  if (zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Idle ||
+      zero_index_calibration_stage_ == ZeroIndexCalibrationStage::Verify) {
+    return;
+  }
+  const uint64_t timeout_us =
+      static_cast<uint64_t>(
+          settings_.encoder.zero_index_calibration_timeout_ms) *
+      1000ULL;
+  if (scheduled_us >= zero_index_calibration_started_us_ &&
+      scheduled_us - zero_index_calibration_started_us_ > timeout_us) {
+    zero_index_calibration_stage_ = ZeroIndexCalibrationStage::Idle;
+    zero_index_hysteresis_candidate_valid_ = false;
+    zero_index_calibration_last_result_ = protocol::ResultCode::InvalidValue;
+    zero_index_calibration_pending_falling_ = false;
+    motor_.stop();
+    controller_.reset();
+    motion_limiter_.reset();
+    encoder_watchdog_.reset();
+    state_ = RunState::Disarmed;
+    configureZeroIndexSensor();
+    zero_index_calibration_status_pending_ = true;
+    return;
+  }
+  if (zero_index_calibration_stage_ ==
+          ZeroIndexCalibrationStage::PauseBeforeCounterclockwise) {
+    if (scheduled_us >= zero_index_calibration_deadline_us_) {
+      zero_index_calibration_stage_ =
+          ZeroIndexCalibrationStage::Counterclockwise;
+      zero_index_calibration_pending_falling_ = false;
+      zero_index_calibration_seen_rising_sequence_ =
+          zero_capture.rising.sequence;
+      zero_index_calibration_seen_falling_sequence_ =
+          zero_capture.falling.sequence;
+      controller_.reset();
+      motion_limiter_.reset();
+      encoder_watchdog_.reset();
+      zero_index_calibration_status_pending_ = true;
+    }
+    return;
+  }
+
+  const bool rising_changed =
+      zero_capture.rising.sequence !=
+      zero_index_calibration_seen_rising_sequence_;
+  const bool falling_changed =
+      zero_capture.falling.sequence !=
+      zero_index_calibration_seen_falling_sequence_;
+  if (rising_changed) {
+    zero_index_calibration_seen_rising_sequence_ =
+        zero_capture.rising.sequence;
+  }
+  if (falling_changed) {
+    zero_index_calibration_seen_falling_sequence_ =
+        zero_capture.falling.sequence;
+  }
+  if (rising_changed && falling_changed) {
+    if (zero_capture.falling.timestamp_us <=
+        zero_capture.rising.timestamp_us) {
+      processZeroIndexCalibrationEdge(
+          zero_capture.falling, ZeroIndexEdge::Falling);
+      processZeroIndexCalibrationEdge(
+          zero_capture.rising, ZeroIndexEdge::Rising);
+    } else {
+      processZeroIndexCalibrationEdge(
+          zero_capture.rising, ZeroIndexEdge::Rising);
+      processZeroIndexCalibrationEdge(
+          zero_capture.falling, ZeroIndexEdge::Falling);
+    }
+  } else if (falling_changed) {
+    processZeroIndexCalibrationEdge(
+        zero_capture.falling, ZeroIndexEdge::Falling);
+  } else if (rising_changed) {
+    processZeroIndexCalibrationEdge(
+        zero_capture.rising, ZeroIndexEdge::Rising);
+  }
 }
 
 bool MachineApplication::clearFaultsAndRecheck() {
@@ -1141,7 +1428,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     }
     case MessageId::SetParameter: {
       if (frame.payload_size != sizeof(ParameterPayload) || state_ != RunState::Disarmed ||
-          characterization_stage_ != CharacterizationStage::Idle) {
+          characterization_stage_ != CharacterizationStage::Idle ||
+          zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 frame.payload_size != sizeof(ParameterPayload) ? ResultCode::InvalidLength
                                                                 : ResultCode::UnsafeState);
@@ -1167,7 +1455,11 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.control.period_us = static_cast<uint32_t>(update.value); break;
         case ParameterId::CountsPerRevolution:
           if (!whole(update.value)) { sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return; }
-          candidate.encoder.counts_per_output_revolution = static_cast<uint32_t>(update.value); break;
+          candidate.encoder.counts_per_output_revolution = static_cast<uint32_t>(update.value);
+          candidate.encoder.zero_index_hysteresis_calibrated = 0U;
+          candidate.encoder.clockwise_rising_correction_ticks = 0;
+          candidate.encoder.clockwise_falling_correction_ticks = 0;
+          break;
         case ParameterId::StreamRateHz:
           if (!whole(update.value) || update.value > UINT16_MAX) { sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return; }
           candidate.serial.stream_rate_hz = static_cast<uint16_t>(update.value); break;
@@ -1248,6 +1540,45 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.encoder.zero_position_offset_ticks =
               static_cast<uint32_t>(update.value);
           break;
+        case ParameterId::ZeroIndexReferenceSide:
+          if (!whole(update.value) || update.value > 1.0F) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+            return;
+          }
+          candidate.encoder.zero_index_reference_side =
+              static_cast<uint8_t>(update.value);
+          break;
+        case ParameterId::ZeroIndexCalibrationDuty:
+          candidate.encoder.zero_index_calibration_duty = update.value;
+          break;
+        case ParameterId::ZeroIndexCalibrationTimeoutMs:
+          if (!whole(update.value)) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+            return;
+          }
+          candidate.encoder.zero_index_calibration_timeout_ms =
+              static_cast<uint32_t>(update.value);
+          break;
+        case ParameterId::ZeroIndexCalibrationReversalPauseMs:
+          if (!whole(update.value) || update.value > UINT16_MAX) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+            return;
+          }
+          candidate.encoder.zero_index_calibration_reversal_pause_ms =
+              static_cast<uint16_t>(update.value);
+          break;
+        case ParameterId::ZeroIndexCalibrationMaximumErrorTicks:
+          if (!whole(update.value) || update.value > UINT16_MAX) {
+            sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+            return;
+          }
+          candidate.encoder.zero_index_calibration_maximum_error_ticks =
+              static_cast<uint16_t>(update.value);
+          break;
+        case ParameterId::ZeroIndexCalibrationSpeedRpm:
+          candidate.encoder.zero_index_calibration_speed_rpm =
+              update.value;
+          break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -1286,6 +1617,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       zero_index_.setMinimumSeparationCounts(zeroIndexMinimumSeparationCounts(
           settings_.encoder.counts_per_output_revolution,
           settings_.encoder.zero_index_minimum_separation_revolutions));
+      configureZeroIndexSensor();
       rotor_phase_tracker_.configure(settings_.encoder.counts_per_output_revolution,
                                      settings_.encoder.direction,
                                      settings_.encoder.zero_index_correction_gain,
@@ -1338,7 +1670,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidLength);
       } else if (faults_ != FaultNone ||
                  (state_ != RunState::Disarmed && state_ != RunState::Armed) ||
-                 characterization_stage_ != CharacterizationStage::Idle) {
+                 characterization_stage_ != CharacterizationStage::Idle ||
+                 zero_index_calibration_stage_ !=
+                     ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
       } else {
         state_ = RunState::Armed;
@@ -1347,7 +1681,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       return;
     case MessageId::StartRun: {
       const auto* selected = selectedProfile();
-      if (state_ != RunState::Armed || selected == nullptr) {
+      if (state_ != RunState::Armed || selected == nullptr ||
+          zero_index_calibration_stage_ !=
+              ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
         return;
       }
@@ -1362,7 +1698,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     }
     case MessageId::StartVelocityTest: {
       if (frame.payload_size != sizeof(VelocityTestPayload) || state_ != RunState::Armed ||
-          faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle) {
+          faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle ||
+          zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 frame.payload_size != sizeof(VelocityTestPayload) ? ResultCode::InvalidLength
                                                                    : ResultCode::UnsafeState);
@@ -1371,8 +1708,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       VelocityTestPayload test{};
       std::memcpy(&test, frame.payload, sizeof(test));
       if (!std::isfinite(test.target_velocity_rad_s) ||
-          test.target_velocity_rad_s <= 0.0F ||
-          test.target_velocity_rad_s > settings_.safety.max_velocity_rad_s ||
+          std::fabs(test.target_velocity_rad_s) < 0.0001F ||
+          std::fabs(test.target_velocity_rad_s) >
+              settings_.safety.max_velocity_rad_s ||
           test.duration_ms < 100U || test.duration_ms > 3600000U) {
         sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
         return;
@@ -1394,7 +1732,8 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::StartVelocitySequence: {
       if (frame.payload_size != sizeof(VelocitySequencePayload) ||
           state_ != RunState::Armed || faults_ != FaultNone ||
-          characterization_stage_ != CharacterizationStage::Idle) {
+          characterization_stage_ != CharacterizationStage::Idle ||
+          zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 frame.payload_size != sizeof(VelocitySequencePayload)
                     ? ResultCode::InvalidLength
@@ -1411,8 +1750,9 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       std::array<float, kMaximumVelocityTestLevels> levels{};
       for (size_t index = 0U; valid && index < test.level_count; ++index) {
         const float level = test.levels_rad_s[index];
-        valid = std::isfinite(level) && level > 0.0F &&
-                level <= settings_.safety.max_velocity_rad_s;
+        valid = std::isfinite(level) && std::fabs(level) >= 0.0001F &&
+                std::fabs(level) <=
+                    settings_.safety.max_velocity_rad_s;
         levels[index] = level;
       }
       if (!valid) {
@@ -1435,10 +1775,13 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       return;
     case MessageId::MotorTest: {
       if (frame.payload_size != sizeof(MotorTestPayload) || state_ != RunState::Armed ||
-          faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle) {
+          faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle ||
+          zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 state_ != RunState::Armed || faults_ != FaultNone ||
-                        characterization_stage_ != CharacterizationStage::Idle
+                        characterization_stage_ != CharacterizationStage::Idle ||
+                        zero_index_calibration_stage_ !=
+                            ZeroIndexCalibrationStage::Idle
                     ? ResultCode::UnsafeState
                     : ResultCode::InvalidLength);
         return;
@@ -1651,6 +1994,146 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           !sendRotorZeroCalibrationStatus(frame.sequence);
       return;
     }
+    case MessageId::ZeroIndexHysteresisCalibration: {
+      if (frame.payload_size !=
+          sizeof(ZeroIndexHysteresisCalibrationPayload)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidLength);
+        return;
+      }
+      ZeroIndexHysteresisCalibrationPayload calibration{};
+      std::memcpy(&calibration, frame.payload, sizeof(calibration));
+      if (calibration.action >
+              static_cast<uint8_t>(
+                  ZeroIndexHysteresisCalibrationAction::RequestStatus) ||
+          calibration.reference_side >
+              static_cast<uint8_t>(
+                  ZeroIndexReferenceSide::ClockwiseFalling)) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      const auto action =
+          static_cast<ZeroIndexHysteresisCalibrationAction>(
+              calibration.action);
+      if (action ==
+          ZeroIndexHysteresisCalibrationAction::RequestStatus) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        zero_index_calibration_status_pending_ =
+            !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (action == ZeroIndexHysteresisCalibrationAction::Cancel) {
+        transitionToStopped();
+        zero_index_calibration_last_result_ = ResultCode::Ok;
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        zero_index_calibration_status_pending_ =
+            !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (action ==
+          ZeroIndexHysteresisCalibrationAction::SelectReferenceSide) {
+        if (state_ != RunState::Disarmed ||
+            zero_index_calibration_stage_ !=
+                ZeroIndexCalibrationStage::Verify ||
+            !zero_index_hysteresis_candidate_valid_) {
+          sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
+          return;
+        }
+        zero_index_candidate_reference_side_ =
+            calibration.reference_side;
+        zero_index_.configureDirectionSelection(
+            settings_.encoder.direction,
+            static_cast<ZeroIndexReferenceSide>(
+                zero_index_candidate_reference_side_),
+            zero_index_hysteresis_candidate_
+                .clockwise_rising_correction_ticks,
+            zero_index_hysteresis_candidate_
+                .clockwise_falling_correction_ticks);
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        zero_index_calibration_status_pending_ =
+            !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (action == ZeroIndexHysteresisCalibrationAction::Start) {
+        if (state_ != RunState::Armed || faults_ != FaultNone ||
+            characterization_stage_ != CharacterizationStage::Idle ||
+            zero_index_calibration_stage_ !=
+                ZeroIndexCalibrationStage::Idle) {
+          sendAck(frame.sequence, frame.message_id,
+                  ResultCode::UnsafeState);
+          return;
+        }
+        const ZeroIndexCapture capture = zero_index_.snapshot();
+        zero_index_hysteresis_calibration_.configure(
+            settings_.encoder.counts_per_output_revolution,
+            settings_.encoder.direction,
+            settings_.encoder
+                .zero_index_calibration_maximum_error_ticks);
+        zero_index_hysteresis_candidate_ = {};
+        zero_index_hysteresis_candidate_valid_ = false;
+        zero_index_candidate_reference_side_ =
+            calibration.reference_side;
+        zero_index_calibration_seen_rising_sequence_ =
+            capture.rising.sequence;
+        zero_index_calibration_seen_falling_sequence_ =
+            capture.falling.sequence;
+        zero_index_calibration_pending_falling_ = false;
+        zero_index_calibration_started_us_ =
+            static_cast<uint64_t>(esp_timer_get_time());
+        zero_index_calibration_stage_ =
+            ZeroIndexCalibrationStage::Clockwise;
+        zero_index_calibration_last_result_ = ResultCode::Ok;
+        controller_.reset();
+        motion_limiter_.reset();
+        encoder_watchdog_.reset();
+        sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+        zero_index_calibration_status_pending_ =
+            !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+        return;
+      }
+      if (state_ != RunState::Disarmed ||
+          zero_index_calibration_stage_ !=
+              ZeroIndexCalibrationStage::Verify ||
+          !zero_index_hysteresis_candidate_valid_) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
+        return;
+      }
+      MachineSettings candidate = settings_;
+      candidate.encoder.zero_index_reference_side =
+          zero_index_candidate_reference_side_;
+      candidate.encoder.zero_index_hysteresis_calibrated = 1U;
+      candidate.encoder.clockwise_rising_correction_ticks =
+          zero_index_hysteresis_candidate_
+              .clockwise_rising_correction_ticks;
+      candidate.encoder.clockwise_falling_correction_ticks =
+          zero_index_hysteresis_candidate_
+              .clockwise_falling_correction_ticks;
+      if (!SettingsStore::validate(candidate)) {
+        sendAck(frame.sequence, frame.message_id,
+                ResultCode::InvalidValue);
+        return;
+      }
+      motor_.stop();
+      if (!settings_store_.save(candidate)) {
+        zero_index_calibration_last_result_ =
+            ResultCode::StorageFailure;
+        sendAck(frame.sequence, frame.message_id,
+                ResultCode::StorageFailure);
+        zero_index_calibration_status_pending_ =
+            !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+        return;
+      }
+      settings_ = candidate;
+      zero_index_calibration_stage_ =
+          ZeroIndexCalibrationStage::Idle;
+      zero_index_hysteresis_candidate_valid_ = false;
+      configureZeroIndexSensor();
+      zero_index_calibration_last_result_ = ResultCode::Ok;
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      sendSettings(frame.sequence);
+      zero_index_calibration_status_pending_ =
+          !sendZeroIndexHysteresisCalibrationStatus(frame.sequence);
+      return;
+    }
     case MessageId::SupplyVoltageCalibration: {
       if (frame.payload_size != sizeof(SupplyVoltageCalibrationPayload) ||
           state_ == RunState::Running) {
@@ -1805,6 +2288,15 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       static_cast<uint8_t>(settings_.velocity_estimator_method),
       static_cast<uint8_t>(settings_.velocity_acceleration_window_samples),
       settings_.encoder.zero_position_offset_ticks,
+      settings_.encoder.zero_index_reference_side,
+      settings_.encoder.zero_index_hysteresis_calibrated,
+      settings_.encoder.clockwise_rising_correction_ticks,
+      settings_.encoder.clockwise_falling_correction_ticks,
+      settings_.encoder.zero_index_calibration_duty,
+      settings_.encoder.zero_index_calibration_timeout_ms,
+      settings_.encoder.zero_index_calibration_reversal_pause_ms,
+      settings_.encoder.zero_index_calibration_maximum_error_ticks,
+      settings_.encoder.zero_index_calibration_speed_rpm,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }
@@ -1839,6 +2331,36 @@ bool MachineApplication::sendRotorZeroCalibrationStatus(
   };
   return serial_link_.send(protocol::MessageId::RotorZeroCalibrationStatus,
                            sequence, &payload, sizeof(payload));
+}
+
+bool MachineApplication::sendZeroIndexHysteresisCalibrationStatus(
+    const uint16_t sequence) {
+  const ZeroIndexHysteresisCalibrationStatusPayload payload{
+      static_cast<uint8_t>(zero_index_calibration_stage_),
+      zero_index_hysteresis_calibration_.clockwiseCount(),
+      zero_index_hysteresis_calibration_.counterclockwiseCount(),
+      zero_index_hysteresis_candidate_valid_
+          ? zero_index_candidate_reference_side_
+          : settings_.encoder.zero_index_reference_side,
+      static_cast<uint8_t>(
+          zero_index_hysteresis_candidate_valid_ ? 1U : 0U),
+      static_cast<uint8_t>(zero_index_calibration_last_result_),
+      zero_index_hysteresis_candidate_valid_
+          ? zero_index_hysteresis_candidate_
+                .clockwise_rising_correction_ticks
+          : settings_.encoder.clockwise_rising_correction_ticks,
+      zero_index_hysteresis_candidate_valid_
+          ? zero_index_hysteresis_candidate_
+                .clockwise_falling_correction_ticks
+          : settings_.encoder.clockwise_falling_correction_ticks,
+      zero_index_hysteresis_candidate_valid_
+          ? zero_index_hysteresis_candidate_.maximum_residual_ticks
+          : static_cast<uint16_t>(0U),
+      telemetry_.rotor_position_deg,
+  };
+  return serial_link_.send(
+      protocol::MessageId::ZeroIndexHysteresisCalibrationStatus,
+      sequence, &payload, sizeof(payload));
 }
 
 bool MachineApplication::sendProfile(const VelocityProfileConfiguration& profile,

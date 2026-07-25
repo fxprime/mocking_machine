@@ -50,6 +50,8 @@ enum class MessageId : uint16_t {
   CurrentCalibrationStatus = 0x0302,
   RotorZeroCalibration = 0x0303,
   RotorZeroCalibrationStatus = 0x0304,
+  ZeroIndexHysteresisCalibration = 0x0305,
+  ZeroIndexHysteresisCalibrationStatus = 0x0306,
   CharacterizationResult = 0x0310,
   CharacterizationAction = 0x0311,
   CharacterizationStatus = 0x0312,

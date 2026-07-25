@@ -4,6 +4,11 @@
 
 namespace mm {
 
+constexpr bool velocityControlDemandActive(
+    const float desired_velocity_rad_s) {
+  return desired_velocity_rad_s != 0.0F;
+}
+
 class IncrementalVelocityController {
  public:
   void configure(const ControlConfiguration& configuration);

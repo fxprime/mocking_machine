@@ -23,6 +23,10 @@ assert.ok(first.levels.every(level => level >= 5 && level <= 25));
 assert.ok(first.levels.slice(1).every((level, index) =>
   Math.abs(level - first.levels[index]) >= 4), "Adjacent levels need useful excitation");
 
+const reverse = createVelocityStepSequence({ ...options, direction: -1 });
+assert.ok(reverse.levels.every(level => level <= -5 && level >= -25),
+  "Reverse PID sequences must contain bounded negative setpoints");
+
 const payload = encodeVelocityStepSequence(first);
 assert.equal(payload.byteLength, 72);
 const view = new DataView(payload.buffer);

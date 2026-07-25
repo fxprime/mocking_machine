@@ -57,6 +57,9 @@ assert.match(indexSource, /id="finishEncoderCalibration"/);
 assert.match(indexSource, /id="encoderCalibrationResult"/);
 assert.match(indexSource, /id="saveEncoderCalibration"/);
 assert.match(indexSource, /id="rotorZeroCalibrationWorkspace"/);
+assert.match(indexSource, /id="zeroIndexCalibrationWorkspace"/);
+assert.match(indexSource, /id="startZeroIndexCalibration"/);
+assert.match(indexSource, /id="zeroIndexReferenceSide"[\s\S]*CW rising \/ CCW falling[\s\S]*CW falling \/ CCW rising/);
 assert.match(indexSource, /id="captureRotorZero"/);
 assert.match(indexSource, /stores its wrapped encoder-tick distance from the last accepted index/);
 assert.match(indexSource, /id="saveRotorZero"/);
@@ -81,6 +84,12 @@ assert.match(appSource, /velocityAccelerationWindowSamples:\s*data\.byteLength >
   "GUI must decode the schema-16 acceleration-history length");
 assert.match(appSource, /rotorZeroOffsetTicks:\s*data\.byteLength >= 177 \? data\.getUint32\(173, true\) : 0/,
   "GUI must decode the schema-20 rotor-zero tick offset");
+assert.match(appSource, /zeroIndexReferenceSide:\s*data\.byteLength >= 178 \? data\.getUint8\(177\) : 0/,
+  "GUI must decode the schema-22 direction-aware reference side");
+assert.match(appSource, /zeroIndexClockwiseRisingCorrectionTicks:\s*data\.byteLength >= 183 \? data\.getInt32\(179, true\) : 0/,
+  "GUI must decode the signed CW-rising/CCW-falling correction");
+assert.match(appSource, /zeroIndexCalibrationSpeedRpm:\s*data\.byteLength >= 203 \? data\.getFloat32\(199, true\) : 15/,
+  "GUI must decode the schema-23 closed-loop calibration speed");
 assert.match(appSource, /velocityEstimatorMethod:\s*\{ id: 36,[\s\S]*0 = low-pass,[\s\S]*1 = characterized motor-model Kalman,[\s\S]*2 = encoder-window acceleration prediction/,
   "GUI must expose all three velocity-estimator methods through SET_PARAMETER");
 assert.match(appSource, /velocityAccelerationWindowSamples:\s*\{ id: 37,[\s\S]*Circular velocity-history length/,
@@ -205,17 +214,29 @@ assert.match(appSource, /function renderTuningTestInputMode[\s\S]*profileControl
   "Response-test mode must exclusively reveal its matching input controls");
 assert.match(indexSource, /id="tuningManualPattern"[\s\S]*Repeated random steps[\s\S]*id="tuningRandomLevels"[\s\S]*id="tuningSequencePreview"/,
   "Manual response testing must expose a previewable repeated random sequence");
+assert.match(indexSource, /id="tuningManualDirection"[\s\S]*Forward[\s\S]*Reverse/,
+  "Manual PID tests must expose forward and reverse directions");
 assert.match(appSource, /START_VELOCITY_SEQUENCE:\s*0x0206/,
   "Repeated manual steps must use their dedicated bounded protocol command");
 assert.match(appSource, /encodeVelocityStepSequence\(tuningAction\.sequence\)/,
   "The exact previewed velocity sequence must be sent after arming");
 assert.match(firmwareSource, /static_assert\(sizeof\(VelocitySequencePayload\) == 72U/,
   "Firmware must preserve the bounded velocity-sequence payload");
+assert.match(firmwareSource, /StartVelocityTest[\s\S]*std::fabs\(test\.target_velocity_rad_s\)/,
+  "Firmware must validate single PID-test speed by magnitude");
+assert.match(firmwareSource, /StartVelocitySequence[\s\S]*std::fabs\(level\)/,
+  "Firmware must accept bounded negative PID sequence levels");
+assert.match(firmwareSource, /velocityControlDemandActive\(\s*telemetry_\.desired_velocity_rad_s\)/,
+  "The control path must run PID for signed nonzero velocity demand");
+assert.doesNotMatch(firmwareSource, /telemetry_\.desired_velocity_rad_s\s*>\s*0\.0F/,
+  "The control path must not stop all negative velocity demand");
 assert.doesNotMatch(indexSource, /id="currentCalibrationDialog"/);
 assert.doesNotMatch(indexSource, /id="motorTestCalibrateCurrent"/);
 assert.match(appSource, /CURRENT_CALIBRATION_STATUS:\s*0x0302/);
 assert.match(appSource, /ROTOR_ZERO_CALIBRATION:\s*0x0303/);
 assert.match(appSource, /ROTOR_ZERO_CALIBRATION_STATUS:\s*0x0304/);
+assert.match(appSource, /ZERO_INDEX_HYSTERESIS_CALIBRATION:\s*0x0305/);
+assert.match(appSource, /ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS:\s*0x0306/);
 assert.match(appSource, /new Uint8Array\(5\)/);
 const calibrationCase = firmwareSource.slice(firmwareSource.indexOf("case MessageId::CurrentCalibration:"), firmwareSource.indexOf("case MessageId::SupplyVoltageCalibration:"));
 assert.doesNotMatch(calibrationCase, /currentSenseVoltage\(64U\)/, "Calibration capture must not block the control loop with a 64-read burst");
@@ -229,6 +250,15 @@ assert.doesNotMatch(rotorZeroCase, /rotor_zero_calibration_accumulator_|64U/,
   "Rotor-zero capture must not average samples");
 assert.match(rotorZeroCase, /SettingsStore::validate\(candidate\)[\s\S]*settings_store_\.save\(candidate\)/,
   "Rotor-zero save must validate and persist the candidate");
+const zeroIndexCase = firmwareSource.slice(firmwareSource.indexOf("case MessageId::ZeroIndexHysteresisCalibration:"), firmwareSource.indexOf("case MessageId::SupplyVoltageCalibration:"));
+assert.match(zeroIndexCase, /state_ != RunState::Armed[\s\S]*ZeroIndexCalibrationStage::Clockwise/,
+  "Automatic Hall calibration must require ARM before entering its CW drive stage");
+assert.doesNotMatch(zeroIndexCase, /motor_\.command\(/,
+  "The binary command handler must not write motor output directly");
+assert.match(firmwareSource, /ZeroIndexCalibrationStage::Clockwise[\s\S]*zero_index_calibration_speed_rpm[\s\S]*controller_\.update\([\s\S]*motor_\.command\(/,
+  "Calibration velocity control must be issued from the control path");
+assert.match(appSource, /startZeroIndexCalibration[\s\S]*confirmSafety\([\s\S]*sendFrame\(MSG\.ARM\)/,
+  "The browser must guard and acknowledge arming before automatic Hall calibration");
 const metrics = calculateStepMetrics([
   { timestamp: 0, desired: 0, measured: 0 },
   { timestamp: 100000, desired: 10, measured: 1 },
@@ -240,6 +270,16 @@ assert.equal(metrics.peak, 10.4);
 assert.equal(Math.round(metrics.overshootPercent), 4);
 assert.equal(metrics.riseTimeSeconds, 0.2);
 assert.equal(metrics.settlingTimeSeconds, 0.5);
+const reverseMetrics = calculateStepMetrics([
+  { timestamp: 0, desired: 0, measured: 0 },
+  { timestamp: 100000, desired: -10, measured: -1 },
+  { timestamp: 300000, desired: -10, measured: -9 },
+  { timestamp: 500000, desired: -10, measured: -10.4 },
+  { timestamp: 700000, desired: -10, measured: -10.1 }
+], -10);
+assert.equal(Math.round(reverseMetrics.overshootPercent), 4);
+assert.equal(reverseMetrics.riseTimeSeconds, 0.2);
+assert.equal(reverseMetrics.settlingTimeSeconds, 0.5);
 
 assert.equal(symmetricNiceLimit(0.069), 0.1);
 assert.equal(symmetricNiceLimit(0.0031), 0.005);

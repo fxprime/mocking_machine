@@ -36,6 +36,7 @@ void IRAM_ATTR QuadratureEncoder::handleEdge() {
   count_ += delta;
   previous_state_ = state;
   if (delta != 0) {
+    last_direction_ = delta;
     const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
     last_edge_us_ = now;
   }

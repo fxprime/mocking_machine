@@ -34,7 +34,7 @@ flowchart TB
 
 | รายการ | ค่าในเฟิร์มแวร์ปัจจุบัน |
 |---|---|
-| Wire protocol / settings schema | Version 1 / schema 21 |
+| Wire protocol / settings schema | Version 1 / schema 23 |
 | Control loop | ค่าเริ่มต้น 2,000 µs หรือ 500 Hz |
 | UART / telemetry | ค่าเริ่มต้น 115200 bit/s / 50 Hz |
 | Encoder CPR | ค่าเริ่มต้น 184 counts/rev เป็น placeholder; ต้องสอบเทียบกับเครื่องจริง |
@@ -48,7 +48,7 @@ flowchart TB
 | ESP32-WROVER | รัน control loop 500 Hz, safety state machine และ serial protocol |
 | มอเตอร์เกียร์ DC 12 V, 1590 rpm พร้อม AB encoder | ต้นกำลังและ feedback ความเร็ว/ตำแหน่ง |
 | VNH2SP30 Single Monster Motor Driver | ขับมอเตอร์ด้วย PWM พร้อม CS และ EN/DIAG แบบเลือกใช้งาน |
-| เซนเซอร์อินฟราเรด | ตรวจตำแหน่งศูนย์ของโรเตอร์ด้วย rising-edge interrupt |
+| เซนเซอร์ Hall | ตรวจตำแหน่งศูนย์ของโรเตอร์ด้วย rising/falling-edge interrupt และชดเชย hysteresis ตามทิศหมุน |
 | ตัวแบ่งแรงดัน 6.8 kΩ / 1 kΩ | วัดแรงดัน VIN ของ motor driver ที่ GPIO36 |
 | จานโรเตอร์ 12 ตำแหน่ง | ติดตั้งมวลไม่สมดุลที่ระยะ 30° และกำหนด strength 1–10 |
 

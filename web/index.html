@@ -177,10 +177,11 @@
         </div>
         <div id="tuningManualControls" class="form-grid tuning-source-controls" hidden>
           <label>Pattern <select id="tuningManualPattern"><option value="random" selected>Repeated random steps</option><option value="single">Single step</option></select></label>
+          <label>Direction <select id="tuningManualDirection"><option value="1" selected>Forward</option><option value="-1">Reverse</option></select></label>
           <label class="manual-single-option" hidden>Target velocity (rad/s) <input id="tuningManualVelocity" type="number" min="0.1" step="0.1" value="20"></label>
           <label class="manual-single-option" hidden>Run time (s) <input id="tuningManualDuration" type="number" min="0.1" max="3600" step="0.1" value="5"></label>
-          <label class="manual-random-option">Minimum velocity (rad/s) <input id="tuningRandomMinimum" type="number" min="0.1" step="0.1" value="5"></label>
-          <label class="manual-random-option">Maximum velocity (rad/s) <input id="tuningRandomMaximum" type="number" min="0.1" step="0.1" value="25"></label>
+          <label class="manual-random-option">Minimum speed magnitude (rad/s) <input id="tuningRandomMinimum" type="number" min="0.1" step="0.1" value="5"></label>
+          <label class="manual-random-option">Maximum speed magnitude (rad/s) <input id="tuningRandomMaximum" type="number" min="0.1" step="0.1" value="25"></label>
           <label class="manual-random-option">Number of steps <input id="tuningRandomLevels" type="number" min="2" max="16" step="1" value="10"></label>
           <label class="manual-random-option">Hold each level (s) <input id="tuningRandomHold" type="number" min="0.1" max="360" step="0.1" value="1"></label>
           <div class="manual-random-option sequence-preview">
@@ -315,6 +316,46 @@
           <div class="dialog-actions calibration-actions">
             <button id="cancelEncoderCalibration" type="button">Discard measurement</button>
             <button id="saveEncoderCalibration" type="button" class="primary">Apply and save CPR</button>
+          </div>
+        </section>
+      </article>
+      <article id="zeroIndexCalibrationWorkspace" class="panel">
+        <div class="panel-heading">
+          <div><h2>Zero-index hysteresis</h2><p>Measure both Hall-sensor edges over five clockwise and five counterclockwise passes, then verify the direction-aware correction by hand before saving.</p></div>
+          <span id="zeroIndexCalibrationState" class="status-badge offline" aria-live="polite">● Ready</span>
+        </div>
+        <div class="fault-banner">▲ Automatic calibration rotates the motor in both directions. Remove imbalance weights, close the guard, verify calibration speed in Parameters, and keep the emergency stop accessible.</div>
+        <div class="metric-grid compact-metrics">
+          <article class="metric"><span>Clockwise valid passes</span><strong id="zeroIndexClockwisePasses">0/5</strong></article>
+          <article class="metric"><span>Counterclockwise valid passes</span><strong id="zeroIndexCounterclockwisePasses">0/5</strong></article>
+          <article class="metric"><span>Saved calibration</span><strong id="zeroIndexCalibrationValidity">Not calibrated</strong></article>
+        </div>
+        <ol class="calibration-steps">
+          <li>Start the guarded automatic run. Firmware validates each same-edge interval against configured CPR.</li>
+          <li>After both directions complete, rotate the stopped rotor by hand through the sensor from CW and CCW.</li>
+          <li>Choose either physical reference side, confirm the same marked position returns to zero, then save.</li>
+        </ol>
+        <div class="action-row">
+          <button id="startZeroIndexCalibration" type="button" disabled>Run 5× CW + 5× CCW</button>
+          <button id="cancelZeroIndexCalibration" type="button" disabled>Stop / discard</button>
+        </div>
+        <section id="zeroIndexCalibrationCandidate" class="hidden" aria-live="polite">
+          <h3>Manual verification</h3>
+          <dl class="result-grid">
+            <div><dt>CW rising / CCW falling correction</dt><dd><span id="zeroIndexRisingCorrection">0</span> ticks</dd></div>
+            <div><dt>CW falling / CCW rising correction</dt><dd><span id="zeroIndexFallingCorrection">0</span> ticks</dd></div>
+            <div><dt>Maximum repeatability residual</dt><dd id="zeroIndexMaximumResidual">0 ticks</dd></div>
+            <div><dt>Live corrected position</dt><dd id="zeroIndexVerificationPosition">—</dd></div>
+          </dl>
+          <label>Reference side
+            <select id="zeroIndexReferenceSide" disabled>
+              <option value="0">CW rising / CCW falling</option>
+              <option value="1">CW falling / CCW rising</option>
+            </select>
+          </label>
+          <p class="notice">Changing the reference side applies the candidate only in RAM. Rotate through the index slowly in both directions before saving.</p>
+          <div class="dialog-actions calibration-actions">
+            <button id="saveZeroIndexCalibration" type="button" class="primary" disabled>Apply and save hysteresis calibration</button>
           </div>
         </section>
       </article>

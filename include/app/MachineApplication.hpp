@@ -12,6 +12,7 @@
 #include "control/MotionLimiter.hpp"
 #include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
+#include "control/ZeroIndexCalibration.hpp"
 #include "core/Types.hpp"
 #include "drivers/QuadratureEncoder.hpp"
 #include "drivers/Vnh2sp30MotorDriver.hpp"
@@ -58,6 +59,7 @@ class MachineApplication final {
   bool sendCharacterizationStatus(uint16_t sequence);
   bool sendCurrentCalibrationStatus(uint16_t sequence);
   bool sendRotorZeroCalibrationStatus(uint16_t sequence);
+  bool sendZeroIndexHysteresisCalibrationStatus(uint16_t sequence);
   void sendAck(uint16_t sequence, protocol::MessageId request, protocol::ResultCode result);
   void transitionToStopped();
   bool clearFaultsAndRecheck();
@@ -66,6 +68,11 @@ class MachineApplication final {
   void updateCharacterization(uint64_t scheduled_us);
   void configureVelocityController();
   void updateCurrentCalibrationCapture(float sense_voltage_v);
+  void updateZeroIndexHysteresisCalibration(
+      uint64_t scheduled_us, const ZeroIndexCapture& zero_capture);
+  void processZeroIndexCalibrationEdge(
+      const ZeroIndexEdgeCapture& capture, ZeroIndexEdge edge);
+  void configureZeroIndexSensor();
 
   void commandHelp(int argc, char* argv[]);
   void commandStatus(int argc, char* argv[]);
@@ -154,6 +161,29 @@ class MachineApplication final {
       protocol::ResultCode::Ok;
   bool rotor_zero_calibration_candidate_valid_ = false;
   bool rotor_zero_calibration_status_pending_ = false;
+
+  enum class ZeroIndexCalibrationStage : uint8_t {
+    Idle = 0,
+    Clockwise = 1,
+    PauseBeforeCounterclockwise = 2,
+    Counterclockwise = 3,
+    Verify = 4,
+  };
+  ZeroIndexCalibrationStage zero_index_calibration_stage_ =
+      ZeroIndexCalibrationStage::Idle;
+  ZeroIndexHysteresisCalibration zero_index_hysteresis_calibration_{};
+  ZeroIndexHysteresisResult zero_index_hysteresis_candidate_{};
+  uint64_t zero_index_calibration_started_us_ = 0U;
+  uint64_t zero_index_calibration_deadline_us_ = 0U;
+  uint32_t zero_index_calibration_seen_rising_sequence_ = 0U;
+  uint32_t zero_index_calibration_seen_falling_sequence_ = 0U;
+  int64_t zero_index_calibration_pending_falling_count_ = 0;
+  bool zero_index_calibration_pending_falling_ = false;
+  bool zero_index_hysteresis_candidate_valid_ = false;
+  uint8_t zero_index_candidate_reference_side_ = 0U;
+  protocol::ResultCode zero_index_calibration_last_result_ =
+      protocol::ResultCode::Ok;
+  bool zero_index_calibration_status_pending_ = false;
 };
 
 }  // namespace mm

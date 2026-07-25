@@ -122,8 +122,9 @@ void MachineApplication::commandStatus(int, char*[]) { printStatus(); }
 
 void MachineApplication::commandArm(int, char*[]) {
   if (faults_ != FaultNone || (state_ != RunState::Disarmed && state_ != RunState::Armed) ||
-      characterization_stage_ != CharacterizationStage::Idle) {
-    Serial.println("ERR stop, clear faults, and end characterization first");
+      characterization_stage_ != CharacterizationStage::Idle ||
+      zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
+    Serial.println("ERR stop, clear faults, and end calibration/characterization first");
     return;
   }
   state_ = RunState::Armed;
@@ -132,7 +133,8 @@ void MachineApplication::commandArm(int, char*[]) {
 
 void MachineApplication::commandRun(int, char*[]) {
   const auto* selected = selectedProfile();
-  if (state_ != RunState::Armed || selected == nullptr) {
+  if (state_ != RunState::Armed || selected == nullptr ||
+      zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
     Serial.println("ERR arm and select a valid profile first");
     return;
   }
@@ -461,6 +463,7 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
   if (argc != 3 || std::strcmp(argv[1], "start") != 0 ||
       std::strcmp(argv[2], "CONFIRM_UNLOADED") != 0 || state_ != RunState::Armed ||
       faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle ||
+      zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle ||
       characterization_result_pending_) {
     Serial.println("ERR review pending result or remove load, arm, then: characterize start CONFIRM_UNLOADED");
     return;

@@ -433,6 +433,96 @@ struct LegacyPersistedSettingsV16 {
   uint16_t crc;
 };
 
+struct LegacyEncoderConfigurationV21 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+  uint32_t estimator_stale_timeout_us;
+  uint32_t zero_index_min_interval_us;
+  float zero_index_correction_gain;
+  float zero_index_minimum_separation_revolutions;
+  uint32_t zero_position_offset_ticks;
+};
+
+struct LegacyMachineSettingsV21 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV21 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+  MotorModelConfiguration motor_model;
+  VelocityEstimatorMethod velocity_estimator_method;
+  uint32_t velocity_acceleration_window_samples;
+};
+
+struct LegacyPersistedSettingsV21 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV21 payload;
+  uint16_t crc;
+};
+
+struct LegacyEncoderConfigurationV22 {
+  uint32_t counts_per_output_revolution;
+  int8_t direction;
+  uint8_t estimator_min_counts;
+  uint32_t estimator_max_window_us;
+  uint32_t estimator_stale_timeout_us;
+  uint32_t zero_index_min_interval_us;
+  float zero_index_correction_gain;
+  float zero_index_minimum_separation_revolutions;
+  uint32_t zero_position_offset_ticks;
+  uint8_t zero_index_reference_side;
+  uint8_t zero_index_hysteresis_calibrated;
+  int32_t clockwise_rising_correction_ticks;
+  int32_t clockwise_falling_correction_ticks;
+  float zero_index_calibration_duty;
+  uint32_t zero_index_calibration_timeout_ms;
+  uint16_t zero_index_calibration_reversal_pause_ms;
+  uint16_t zero_index_calibration_maximum_error_ticks;
+};
+
+struct LegacyMachineSettingsV22 {
+  uint32_t schema_version;
+  PinConfiguration pins;
+  ControlConfiguration control;
+  MotorCharacteristics motor;
+  VoltageSenseConfiguration supply_voltage;
+  SafetyConfiguration safety;
+  SerialConfiguration serial;
+  LegacyEncoderConfigurationV22 encoder;
+  CharacterizationConfiguration characterization;
+  MachineLoadSetting load_setting;
+  uint8_t profile_count;
+  uint16_t selected_profile_id;
+  std::array<VelocityProfileConfiguration, kMaximumProfiles> profiles;
+  int8_t motor_direction;
+  StopMode stop_mode;
+  MotorModelConfiguration motor_model;
+  VelocityEstimatorMethod velocity_estimator_method;
+  uint32_t velocity_acceleration_window_samples;
+};
+
+struct LegacyPersistedSettingsV22 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV22 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
               "Schema-v4 to v5 migration layout assumption changed");
@@ -467,7 +557,7 @@ static_assert(sizeof(LegacyMachineSettingsV15) + sizeof(uint32_t) ==
                   sizeof(LegacyMachineSettingsV16),
               "Schema-v15 to v16 migration layout assumption changed");
 static_assert(sizeof(LegacyMachineSettingsV16) + sizeof(float) ==
-                  sizeof(MachineSettings),
+                  sizeof(LegacyMachineSettingsV21),
               "Schema-v16 to v17 migration layout assumption changed");
 
 void copyLegacyControl(const LegacyControlConfigurationV5& source,
@@ -531,6 +621,49 @@ void copyLegacyEncoder(const LegacyEncoderConfigurationV16& source,
   target.zero_index_correction_gain = source.zero_index_correction_gain;
   target.zero_index_minimum_separation_revolutions =
       source.zero_index_minimum_separation_revolutions;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV21& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+  target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
+  target.zero_index_min_interval_us = source.zero_index_min_interval_us;
+  target.zero_index_correction_gain = source.zero_index_correction_gain;
+  target.zero_index_minimum_separation_revolutions =
+      source.zero_index_minimum_separation_revolutions;
+  target.zero_position_offset_ticks = source.zero_position_offset_ticks;
+}
+
+void copyLegacyEncoder(const LegacyEncoderConfigurationV22& source,
+                       EncoderConfiguration& target) {
+  target.counts_per_output_revolution = source.counts_per_output_revolution;
+  target.direction = source.direction;
+  target.estimator_min_counts = source.estimator_min_counts;
+  target.estimator_max_window_us = source.estimator_max_window_us;
+  target.estimator_stale_timeout_us = source.estimator_stale_timeout_us;
+  target.zero_index_min_interval_us = source.zero_index_min_interval_us;
+  target.zero_index_correction_gain = source.zero_index_correction_gain;
+  target.zero_index_minimum_separation_revolutions =
+      source.zero_index_minimum_separation_revolutions;
+  target.zero_position_offset_ticks = source.zero_position_offset_ticks;
+  target.zero_index_reference_side = source.zero_index_reference_side;
+  target.zero_index_hysteresis_calibrated =
+      source.zero_index_hysteresis_calibrated;
+  target.clockwise_rising_correction_ticks =
+      source.clockwise_rising_correction_ticks;
+  target.clockwise_falling_correction_ticks =
+      source.clockwise_falling_correction_ticks;
+  target.zero_index_calibration_duty =
+      source.zero_index_calibration_duty;
+  target.zero_index_calibration_timeout_ms =
+      source.zero_index_calibration_timeout_ms;
+  target.zero_index_calibration_reversal_pause_ms =
+      source.zero_index_calibration_reversal_pause_ms;
+  target.zero_index_calibration_maximum_error_ticks =
+      source.zero_index_calibration_maximum_error_ticks;
 }
 
 void copyLegacyMotor(const LegacyMotorCharacteristicsV6& source,
@@ -624,6 +757,8 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.safety.encoder_timeout_velocity_rad_s) ||
       !finite(settings.encoder.zero_index_correction_gain) ||
       !finite(settings.encoder.zero_index_minimum_separation_revolutions) ||
+      !finite(settings.encoder.zero_index_calibration_duty) ||
+      !finite(settings.encoder.zero_index_calibration_speed_rpm) ||
       !finite(settings.supply_voltage.divider_gain) ||
       !finite(settings.supply_voltage.input_offset_v) ||
       !finite(settings.safety.min_supply_voltage_v) ||
@@ -677,6 +812,38 @@ bool SettingsStore::validate(const MachineSettings& settings) {
           EncoderConfiguration::kMaximumZeroIndexMinimumSeparationRevolutions ||
       settings.encoder.zero_position_offset_ticks >=
           settings.encoder.counts_per_output_revolution ||
+      settings.encoder.zero_index_reference_side > 1U ||
+      settings.encoder.zero_index_hysteresis_calibrated > 1U ||
+      std::abs(static_cast<int64_t>(
+          settings.encoder.clockwise_rising_correction_ticks)) >
+          static_cast<int64_t>(
+              settings.encoder.counts_per_output_revolution / 2U) ||
+      std::abs(static_cast<int64_t>(
+          settings.encoder.clockwise_falling_correction_ticks)) >
+          static_cast<int64_t>(
+              settings.encoder.counts_per_output_revolution / 2U) ||
+      settings.encoder.zero_index_calibration_duty <
+          EncoderConfiguration::kMinimumZeroIndexCalibrationDuty ||
+      settings.encoder.zero_index_calibration_duty > settings.safety.max_duty ||
+      settings.encoder.zero_index_calibration_timeout_ms <
+          EncoderConfiguration::kMinimumZeroIndexCalibrationTimeoutMs ||
+      settings.encoder.zero_index_calibration_timeout_ms >
+          EncoderConfiguration::kMaximumZeroIndexCalibrationTimeoutMs ||
+      settings.encoder.zero_index_calibration_reversal_pause_ms <
+          EncoderConfiguration::kMinimumZeroIndexCalibrationReversalPauseMs ||
+      settings.encoder.zero_index_calibration_reversal_pause_ms >
+          EncoderConfiguration::kMaximumZeroIndexCalibrationReversalPauseMs ||
+      settings.encoder.zero_index_calibration_maximum_error_ticks >
+          EncoderConfiguration::kMaximumZeroIndexCalibrationMaximumErrorTicks ||
+      settings.encoder.zero_index_calibration_maximum_error_ticks >=
+          settings.encoder.counts_per_output_revolution ||
+      settings.encoder.zero_index_calibration_speed_rpm <
+          EncoderConfiguration::kMinimumZeroIndexCalibrationSpeedRpm ||
+      settings.encoder.zero_index_calibration_speed_rpm >
+          EncoderConfiguration::kMaximumZeroIndexCalibrationSpeedRpm ||
+      settings.encoder.zero_index_calibration_speed_rpm *
+              EncoderConfiguration::kRadiansPerSecondPerRpm >
+          settings.safety.max_velocity_rad_s ||
       settings.safety.encoder_timeout_ms < 50U ||
       settings.safety.encoder_timeout_ms > 10000U ||
       settings.safety.encoder_timeout_velocity_rad_s <= 0.0F ||
@@ -785,6 +952,7 @@ bool SettingsStore::load(MachineSettings& settings) {
   const size_t stored_size = preferences.getBytesLength(kBlobKey);
   bool loaded = false;
   bool migrated = false;
+  bool migrated_bearing_value_is_valid = false;
 
   // Stored sizes are schema-specific. Keep each large blob in a separate scope so
   // boot never reserves every historical MachineSettings layout on the task stack.
@@ -802,18 +970,83 @@ bool SettingsStore::load(MachineSettings& settings) {
     if (valid_blob && current_schema) {
       settings = blob.payload;
       loaded = validate(settings);
-    } else if (valid_blob &&
-               (blob.schema_version == 17U || blob.schema_version == 18U ||
-                blob.schema_version == 19U || blob.schema_version == 20U) &&
-               blob.payload.schema_version == blob.schema_version) {
-      settings = blob.payload;
-      settings.schema_version = MachineSettings::kSchemaVersion;
-      if (blob.schema_version < 20U) {
-        settings.encoder.zero_position_offset_ticks = 0;
-      }
-      settings.load_setting.broken_bearing = false;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV22)) {
+    LegacyPersistedSettingsV22 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload),
+        sizeof(blob.payload));
+    const bool compatible_schema =
+        blob.schema_version == 22U &&
+        blob.payload.schema_version == 22U;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        compatible_schema && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      settings.motor_model = blob.payload.motor_model;
+      settings.velocity_estimator_method =
+          blob.payload.velocity_estimator_method;
+      settings.velocity_acceleration_window_samples =
+          blob.payload.velocity_acceleration_window_samples;
       loaded = validate(settings);
       migrated = loaded;
+      migrated_bearing_value_is_valid = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV21)) {
+    LegacyPersistedSettingsV21 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload), sizeof(blob.payload));
+    const bool compatible_schema =
+        blob.schema_version >= 17U && blob.schema_version <= 21U &&
+        blob.payload.schema_version == blob.schema_version;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        compatible_schema && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.pins;
+      settings.control = blob.payload.control;
+      settings.motor = blob.payload.motor;
+      settings.supply_voltage = blob.payload.supply_voltage;
+      settings.safety = blob.payload.safety;
+      settings.serial = blob.payload.serial;
+      copyLegacyEncoder(blob.payload.encoder, settings.encoder);
+      if (blob.schema_version < 20U) {
+        settings.encoder.zero_position_offset_ticks = 0U;
+      }
+      settings.characterization = blob.payload.characterization;
+      settings.load_setting = blob.payload.load_setting;
+      if (blob.schema_version < 21U) {
+        settings.load_setting.broken_bearing = false;
+      }
+      settings.profile_count = blob.payload.profile_count;
+      settings.selected_profile_id = blob.payload.selected_profile_id;
+      settings.profiles = blob.payload.profiles;
+      settings.motor_direction = blob.payload.motor_direction;
+      settings.stop_mode = blob.payload.stop_mode;
+      settings.motor_model = blob.payload.motor_model;
+      settings.velocity_estimator_method = blob.payload.velocity_estimator_method;
+      settings.velocity_acceleration_window_samples =
+          blob.payload.velocity_acceleration_window_samples;
+      loaded = validate(settings);
+      migrated = loaded;
+      migrated_bearing_value_is_valid =
+          loaded && blob.schema_version >= 21U;
     }
   } else if (stored_size == sizeof(LegacyPersistedSettingsV16)) {
     LegacyPersistedSettingsV16 blob{};
@@ -1173,7 +1406,9 @@ bool SettingsStore::load(MachineSettings& settings) {
   if (migrated) {
     // Schemas 4–20 used this byte as structure padding, so never interpret its
     // stored value as a bearing label during migration.
-    settings.load_setting.broken_bearing = false;
+    if (!migrated_bearing_value_is_valid) {
+      settings.load_setting.broken_bearing = false;
+    }
     save(settings);
   }
   return true;

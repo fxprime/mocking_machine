@@ -41,11 +41,12 @@ Missed control ticks are never replayed against stale sensor data. During active
 
 - `esp_timer_get_time()` supplies monotonic 64-bit microseconds.
 - Both quadrature channels use CHANGE interrupts and a 16-entry Gray-code transition table.
-- The zero-index interrupt accepts the first rising edge, rejects later edges inside the
-  configurable debounce interval or before the encoder has travelled the configured fraction
-  of a revolution, and atomically stores the accepted timestamp and encoder count. Rejected
-  zero edges increment only their diagnostic counter and never increment the accepted zero
-  sequence or alter quadrature counting. The first accepted index creates
+- The zero-index CHANGE interrupt records both electrical edges and selects complementary
+  direction-aware edges for one physical magnet boundary. It rejects same-polarity edges inside
+  the configurable debounce interval or before the encoder has travelled the configured fraction
+  of a revolution, then atomically stores the direction-corrected timestamp and encoder count.
+  Rejected selected edges increment only their diagnostic counter and never increment the accepted
+  zero sequence or alter quadrature counting. The first accepted index creates
   the absolute phase reference; subsequent motion comes entirely from encoder-count changes.
   Later index events apply a configurable fraction of the measured phase error to a persistent
   offset, preventing long-term drift without allowing trigger jitter to replace encoder motion.
@@ -60,7 +61,7 @@ Missed control ticks are never replayed against stale sensor data. During active
 
 ## Configuration model
 
-`MachineSettings` owns pins, controller gains, encoder scale and user zero offset, velocity-estimator selection and window length, motion constraints, current and VIN calibration, supply limits, motor characteristics and observer model, profiles, load labels, serial rate, and characterization timing. One schema-versioned NVS blob is protected by CRC16. The current schema is 19. Valid schemas 4–18 are migrated explicitly; invalid CRCs, unsupported layouts, or failed validation fall back to firmware defaults.
+`MachineSettings` owns pins, controller gains, encoder scale, direction-aware Hall-index correction and user zero offset, velocity-estimator selection and window length, motion constraints, current and VIN calibration, supply limits, motor characteristics and observer model, profiles, load labels, serial rate, and characterization timing. One schema-versioned NVS blob is protected by CRC16. The current schema is 23. Valid schemas 4–22 are migrated explicitly; invalid CRCs, unsupported layouts, or failed validation fall back to firmware defaults.
 
 Profiles are fixed-capacity structures (8 profiles, 16 waypoints each). Fixed capacity prevents heap fragmentation and makes NVS and protocol limits explicit. All profiles are constrained to one logical direction; `motor_direction` maps that logical direction to electrical polarity.
 

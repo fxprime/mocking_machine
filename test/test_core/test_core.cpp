@@ -13,6 +13,7 @@
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
 #include "control/RotorPosition.hpp"
+#include "control/ZeroIndexCalibration.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "profile/VelocityProfile.hpp"
 #include "profile/VelocityStepSequence.hpp"
@@ -104,16 +105,16 @@ void test_characterization_result_frame_crc_vector() {
       0xEA4BU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
-void test_settings_schema_21_frame_crc_vector() {
-  std::array<uint8_t, 8U + 177U> protected_bytes{};
+void test_settings_schema_23_frame_crc_vector() {
+  std::array<uint8_t, 8U + 203U> protected_bytes{};
   protected_bytes[0] = 1U;
   protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
   protected_bytes[3] = 0x01U;
   protected_bytes[4] = 0x34U;
   protected_bytes[5] = 0x12U;
-  protected_bytes[6] = 177U;
+  protected_bytes[6] = 203U;
   TEST_ASSERT_EQUAL_HEX16(
-      0x3F78U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
+      0x26FAU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
 void test_rotor_zero_calibration_frame_crc_vector() {
@@ -136,6 +137,18 @@ void test_rotor_zero_calibration_frame_crc_vector() {
   status_bytes[6] = 15U;
   TEST_ASSERT_EQUAL_HEX16(
       0x75C9U, protocol::crc16CcittFalse(status_bytes.data(), status_bytes.size()));
+}
+
+void test_zero_index_hysteresis_calibration_frame_crc_vector() {
+  std::array<uint8_t, 8U + 2U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x05U;  // ZERO_INDEX_HYSTERESIS_CALIBRATION 0x0305.
+  protected_bytes[3] = 0x03U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 2U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0x9ADCU, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
 void test_velocity_step_sequence_holds_each_level_and_finishes_at_zero() {
@@ -175,7 +188,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(21U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(23U, MachineSettings::kSchemaVersion);
 }
 
 void test_bearing_configuration_frame_crc_vector() {
@@ -397,23 +410,112 @@ void test_kalman_uses_low_pass_for_hand_motion_only_while_disarmed() {
                            estimator.update(2, 210000U, 0.0F, false));
 }
 
-void test_zero_index_debounce_accepts_first_and_filters_close_rises() {
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+void test_velocity_estimator_preserves_reverse_sign_in_all_modes() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 100;
+  encoder.estimator_min_counts = 1;
+  encoder.estimator_max_window_us = 100000;
+  encoder.estimator_stale_timeout_us = 100000;
+  const float reverse_encoder_velocity =
+      -(6.283185307F / 100.0F) / 0.1F;
+
+  VelocityEstimator low_pass;
+  low_pass.configure(
+      encoder, 0.0F, MotorModelConfiguration{},
+      VelocityEstimatorMethod::LowPass, 120.0F);
+  low_pass.reset(0, 1000U);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, reverse_encoder_velocity,
+      low_pass.update(-1, 101000U, -0.5F));
+
+  VelocityEstimator windowed;
+  windowed.configure(
+      encoder, 0.0F, MotorModelConfiguration{},
+      VelocityEstimatorMethod::WindowedAccelerationPrediction,
+      120.0F, 3U);
+  windowed.reset(0, 1000U);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, reverse_encoder_velocity,
+      windowed.update(-1, 101000U, -0.5F));
+
+  MotorModelConfiguration model{};
+  model.velocity_gain_forward_rad_s_per_duty = 100.0F;
+  model.velocity_gain_reverse_rad_s_per_duty = 80.0F;
+  model.time_constant_forward_s = 0.10F;
+  model.time_constant_reverse_s = 0.20F;
+  VelocityEstimator kalman;
+  kalman.configure(
+      encoder, 0.025F, model, VelocityEstimatorMethod::Kalman,
+      120.0F, 5U);
+  kalman.reset(0, 1000U);
+  const float expected_prediction =
+      -80.0F * (1.0F - std::exp(-0.05F)) * 0.5F;
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, expected_prediction,
+      kalman.update(0, 11000U, -0.5F));
+  TEST_ASSERT_TRUE(kalman.update(-1, 101000U, -0.5F) < 0.0F);
+
+  encoder.direction = -1;
+  VelocityEstimator inverted_encoder;
+  inverted_encoder.configure(
+      encoder, 0.0F, MotorModelConfiguration{},
+      VelocityEstimatorMethod::LowPass, 120.0F);
+  inverted_encoder.reset(0, 1000U);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, reverse_encoder_velocity,
+      inverted_encoder.update(1, 101000U, -0.5F));
+}
+
+void test_reverse_estimated_velocity_drives_negative_pid_output() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 100;
+  VelocityEstimator estimator;
+  estimator.configure(encoder, 0.0F);
+  estimator.reset(0, 1000U);
+  const float measured =
+      estimator.update(-1, 101000U, -0.5F);
+  TEST_ASSERT_TRUE(measured < 0.0F);
+
+  ControlConfiguration control{};
+  IncrementalVelocityController controller;
+  controller.configure(control);
+  float output = 0.0F;
+  for (uint8_t iteration = 0U; iteration < 20U; ++iteration) {
+    output = controller.update(-2.0F, measured, 0.002F);
+  }
+  TEST_ASSERT_TRUE(output < 0.0F);
+}
+
+void test_velocity_control_demand_accepts_both_directions() {
+  TEST_ASSERT_TRUE(velocityControlDemandActive(10.0F));
+  TEST_ASSERT_TRUE(velocityControlDemandActive(-10.0F));
+  TEST_ASSERT_FALSE(velocityControlDemandActive(0.0F));
+}
+
+void test_zero_index_debounce_accepts_first_and_filters_close_events() {
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexEvent(
       100000U, 0U, 5000U, 100, 0, 0U));
-  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(
+  TEST_ASSERT_FALSE(shouldAcceptZeroIndexEvent(
       102000U, 100000U, 5000U, 100, 100, 0U));
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexEvent(
       105000U, 100000U, 5000U, 100, 100, 0U));
 }
 
 void test_zero_index_rejects_late_bounce_without_rotor_travel() {
   TEST_ASSERT_EQUAL_UINT32(92U, zeroIndexMinimumSeparationCounts(184U, 0.50F));
-  TEST_ASSERT_FALSE(shouldAcceptZeroIndexRise(
+  TEST_ASSERT_FALSE(shouldAcceptZeroIndexEvent(
       106000U, 100000U, 5000U, 101, 100, 92U));
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexEvent(
       106000U, 100000U, 5000U, 192, 100, 92U));
-  TEST_ASSERT_TRUE(shouldAcceptZeroIndexRise(
+  TEST_ASSERT_TRUE(shouldAcceptZeroIndexEvent(
       106000U, 100000U, 5000U, 8, 100, 92U));
+}
+
+void test_zero_index_reversal_still_requires_time_debounce() {
+  TEST_ASSERT_FALSE(
+      zeroIndexMinimumIntervalElapsed(102000U, 100000U, 5000U));
+  TEST_ASSERT_TRUE(
+      zeroIndexMinimumIntervalElapsed(105000U, 100000U, 5000U));
 }
 
 void test_rotor_phase_tracker_uses_encoder_after_first_zero_reference() {
@@ -495,6 +597,57 @@ void test_rotor_zero_capture_uses_one_index_relative_encoder_count() {
   TEST_ASSERT_EQUAL_UINT32(138U, tracker.positionTicksFromZeroIndex(235, 189));
 }
 
+void test_zero_index_reference_side_selects_complementary_edges() {
+  TEST_ASSERT_TRUE(zeroIndexEdgeMatches(
+      1, ZeroIndexEdge::Rising, ZeroIndexReferenceSide::ClockwiseRising));
+  TEST_ASSERT_TRUE(zeroIndexEdgeMatches(
+      -1, ZeroIndexEdge::Falling, ZeroIndexReferenceSide::ClockwiseRising));
+  TEST_ASSERT_FALSE(zeroIndexEdgeMatches(
+      1, ZeroIndexEdge::Falling, ZeroIndexReferenceSide::ClockwiseRising));
+
+  TEST_ASSERT_TRUE(zeroIndexEdgeMatches(
+      1, ZeroIndexEdge::Falling, ZeroIndexReferenceSide::ClockwiseFalling));
+  TEST_ASSERT_TRUE(zeroIndexEdgeMatches(
+      -1, ZeroIndexEdge::Rising, ZeroIndexReferenceSide::ClockwiseFalling));
+}
+
+void test_zero_index_hysteresis_calibration_learns_both_reference_sides() {
+  ZeroIndexHysteresisCalibration calibration;
+  calibration.configure(184U, 1, 2U);
+
+  for (int64_t revolution = 0; revolution < 5; ++revolution) {
+    const int64_t base = revolution * 184;
+    TEST_ASSERT_TRUE(calibration.addPass(1, base + 110, base + 100));
+  }
+  for (int64_t revolution = 0; revolution < 5; ++revolution) {
+    const int64_t base = 5 * 184 - revolution * 184;
+    TEST_ASSERT_TRUE(calibration.addPass(-1, base + 98, base + 112));
+  }
+
+  ZeroIndexHysteresisResult result{};
+  TEST_ASSERT_TRUE(calibration.result(result));
+  TEST_ASSERT_EQUAL_INT32(-2, result.clockwise_rising_correction_ticks);
+  TEST_ASSERT_EQUAL_INT32(2, result.clockwise_falling_correction_ticks);
+  TEST_ASSERT_EQUAL_UINT16(0U, result.maximum_residual_ticks);
+
+  TEST_ASSERT_EQUAL_INT64(
+      1030,
+      applyZeroIndexDirectionCorrection(
+          1032, -1, 1, result.clockwise_rising_correction_ticks));
+  TEST_ASSERT_EQUAL_INT64(
+      1020,
+      applyZeroIndexDirectionCorrection(
+          1018, -1, 1, result.clockwise_falling_correction_ticks));
+}
+
+void test_zero_index_hysteresis_calibration_rejects_lost_counts() {
+  ZeroIndexHysteresisCalibration calibration;
+  calibration.configure(184U, 1, 2U);
+  TEST_ASSERT_TRUE(calibration.addPass(1, 110, 100));
+  TEST_ASSERT_FALSE(calibration.addPass(1, 290, 280));
+  TEST_ASSERT_EQUAL_UINT8(1U, calibration.clockwiseCount());
+}
+
 void test_sine_profile_stays_one_direction() {
   VelocityProfileConfiguration configuration{};
   configuration.kind = ProfileKind::Sine;
@@ -565,7 +718,7 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_FALSE(settings.safety.current_sense_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(21U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(23U, settings.schema_version);
   TEST_ASSERT_FALSE(settings.load_setting.broken_bearing);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
                           static_cast<uint8_t>(settings.velocity_estimator_method));
@@ -599,6 +752,42 @@ void test_encoder_watchdog_refreshes_on_valid_edge() {
   TEST_ASSERT_FALSE(watchdog.update(1200000ULL, 2.0F, 1190000ULL, true, 250U, 1.0F));
   TEST_ASSERT_FALSE(watchdog.update(1430000ULL, 2.0F, 1190000ULL, true, 250U, 1.0F));
   TEST_ASSERT_TRUE(watchdog.update(1440001ULL, 2.0F, 1190000ULL, true, 250U, 1.0F));
+}
+
+void test_encoder_watchdog_can_guard_fixed_duty_calibration_motion() {
+  EncoderActivityWatchdog watchdog;
+  TEST_ASSERT_FALSE(
+      watchdog.update(100000U, 0.0F, 90000U, true, 250U, 1.0F, true));
+  TEST_ASSERT_TRUE(
+      watchdog.update(351000U, 0.0F, 90000U, true, 250U, 1.0F, true));
+}
+
+void test_zero_index_calibration_watchdog_allows_reversal_startup() {
+  EncoderActivityWatchdog watchdog;
+  const uint32_t calibration_timeout_ms =
+      zeroIndexCalibrationEncoderTimeoutMs(250U, 1000U);
+  TEST_ASSERT_EQUAL_UINT32(1000U, calibration_timeout_ms);
+  TEST_ASSERT_FALSE(watchdog.update(
+      100000U, 0.0F, 90000U, true, calibration_timeout_ms, 1.0F, true));
+  TEST_ASSERT_FALSE(watchdog.update(
+      351000U, 0.0F, 90000U, true, calibration_timeout_ms, 1.0F, true));
+  TEST_ASSERT_TRUE(watchdog.update(
+      1100001U, 0.0F, 90000U, true, calibration_timeout_ms, 1.0F, true));
+}
+
+void test_zero_index_calibration_uses_signed_fifteen_rpm_target() {
+  const MachineSettings settings{};
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 15.0F,
+      settings.encoder.zero_index_calibration_speed_rpm);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 1.5707963F,
+      zeroIndexCalibrationTargetVelocityRadS(
+          1, settings.encoder.zero_index_calibration_speed_rpm));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -1.5707963F,
+      zeroIndexCalibrationTargetVelocityRadS(
+          -1, settings.encoder.zero_index_calibration_speed_rpm));
 }
 
 void test_vin_calibration_ceiling_is_above_valid_sixteen_volt_input() {
@@ -694,9 +883,10 @@ int main(int, char**) {
   RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
-  RUN_TEST(test_settings_schema_21_frame_crc_vector);
+  RUN_TEST(test_settings_schema_23_frame_crc_vector);
   RUN_TEST(test_bearing_configuration_frame_crc_vector);
   RUN_TEST(test_rotor_zero_calibration_frame_crc_vector);
+  RUN_TEST(test_zero_index_hysteresis_calibration_frame_crc_vector);
   RUN_TEST(test_velocity_step_sequence_holds_each_level_and_finishes_at_zero);
   RUN_TEST(test_velocity_sequence_frame_crc_vector);
   RUN_TEST(test_telemetry_rate_respects_uart_bandwidth);
@@ -714,14 +904,21 @@ int main(int, char**) {
   RUN_TEST(test_velocity_estimator_method_zero_ignores_motor_model);
   RUN_TEST(test_velocity_estimator_predicts_from_encoder_window_acceleration);
   RUN_TEST(test_kalman_uses_low_pass_for_hand_motion_only_while_disarmed);
-  RUN_TEST(test_zero_index_debounce_accepts_first_and_filters_close_rises);
+  RUN_TEST(test_velocity_estimator_preserves_reverse_sign_in_all_modes);
+  RUN_TEST(test_reverse_estimated_velocity_drives_negative_pid_output);
+  RUN_TEST(test_velocity_control_demand_accepts_both_directions);
+  RUN_TEST(test_zero_index_debounce_accepts_first_and_filters_close_events);
   RUN_TEST(test_zero_index_rejects_late_bounce_without_rotor_travel);
+  RUN_TEST(test_zero_index_reversal_still_requires_time_debounce);
   RUN_TEST(test_rotor_phase_tracker_uses_encoder_after_first_zero_reference);
   RUN_TEST(test_rotor_phase_tracker_applies_fractional_correction_once_per_zero);
   RUN_TEST(test_rotor_phase_tracker_applies_user_zero_without_losing_reference);
   RUN_TEST(test_rotor_user_zero_does_not_drift_during_later_index_correction);
   RUN_TEST(test_rotor_zero_index_filters_wrapped_tick_toward_saved_reference);
   RUN_TEST(test_rotor_zero_capture_uses_one_index_relative_encoder_count);
+  RUN_TEST(test_zero_index_reference_side_selects_complementary_edges);
+  RUN_TEST(test_zero_index_hysteresis_calibration_learns_both_reference_sides);
+  RUN_TEST(test_zero_index_hysteresis_calibration_rejects_lost_counts);
   RUN_TEST(test_sine_profile_stays_one_direction);
   RUN_TEST(test_waypoint_profile_interpolates_and_stops_at_duration);
   RUN_TEST(test_profile_collection_creates_without_replacing_existing_id);
@@ -729,6 +926,9 @@ int main(int, char**) {
   RUN_TEST(test_driver_diagnostic_is_disabled_by_default);
   RUN_TEST(test_encoder_watchdog_grants_fresh_motion_demand_timeout);
   RUN_TEST(test_encoder_watchdog_refreshes_on_valid_edge);
+  RUN_TEST(test_encoder_watchdog_can_guard_fixed_duty_calibration_motion);
+  RUN_TEST(test_zero_index_calibration_watchdog_allows_reversal_startup);
+  RUN_TEST(test_zero_index_calibration_uses_signed_fifteen_rpm_target);
   RUN_TEST(test_vin_calibration_ceiling_is_above_valid_sixteen_volt_input);
   RUN_TEST(test_characterization_peak_is_independent_of_encoder_polarity);
   RUN_TEST(test_characterization_clamps_vmax_and_dependent_settings);

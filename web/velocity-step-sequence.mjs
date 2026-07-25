@@ -16,6 +16,7 @@ export function createVelocityStepSequence(options) {
   const levelCount = Number(options.levelCount);
   const holdSeconds = Number(options.holdSeconds);
   const velocityLimit = Number(options.velocityLimit);
+  const direction = Number(options.direction ?? 1);
   const seed = Number(options.seed) >>> 0;
   if (!(minimumVelocity > 0 && minimumVelocity < maximumVelocity &&
         maximumVelocity <= velocityLimit)) {
@@ -24,6 +25,9 @@ export function createVelocityStepSequence(options) {
   if (!Number.isInteger(levelCount) || levelCount < 2 ||
       levelCount > MAXIMUM_VELOCITY_LEVELS) {
     throw new RangeError(`Random level count must be between 2 and ${MAXIMUM_VELOCITY_LEVELS}.`);
+  }
+  if (direction !== 1 && direction !== -1) {
+    throw new RangeError("Velocity direction must be forward or reverse.");
   }
   const holdMs = Math.round(holdSeconds * 1000);
   if (!(holdMs >= 100 && holdMs * levelCount <= 3600000)) {
@@ -46,7 +50,12 @@ export function createVelocityStepSequence(options) {
     }
     levels.push(level);
   }
-  return { seed, levels, holdMs, durationSeconds: holdMs * levelCount / 1000 };
+  return {
+    seed,
+    levels: levels.map(level => direction * level),
+    holdMs,
+    durationSeconds: holdMs * levelCount / 1000
+  };
 }
 
 export function encodeVelocityStepSequence(sequence) {

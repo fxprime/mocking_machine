@@ -103,6 +103,8 @@ struct SerialConfiguration {
 };
 
 struct EncoderConfiguration {
+  static constexpr float kRadiansPerSecondPerRpm =
+      0.10471975511965977462F;
   static constexpr uint32_t kDefaultZeroIndexMinimumIntervalUs = 5000U;
   static constexpr uint32_t kMinimumZeroIndexMinimumIntervalUs = 100U;
   static constexpr uint32_t kMaximumZeroIndexMinimumIntervalUs = 1000000U;
@@ -112,6 +114,19 @@ struct EncoderConfiguration {
   static constexpr float kDefaultZeroIndexMinimumSeparationRevolutions = 0.50F;
   static constexpr float kMinimumZeroIndexMinimumSeparationRevolutions = 0.0F;
   static constexpr float kMaximumZeroIndexMinimumSeparationRevolutions = 0.95F;
+  static constexpr float kDefaultZeroIndexCalibrationDuty = 0.10F;
+  static constexpr float kMinimumZeroIndexCalibrationDuty = 0.01F;
+  static constexpr float kDefaultZeroIndexCalibrationSpeedRpm = 15.0F;
+  static constexpr float kMinimumZeroIndexCalibrationSpeedRpm = 1.0F;
+  static constexpr float kMaximumZeroIndexCalibrationSpeedRpm = 120.0F;
+  static constexpr uint32_t kDefaultZeroIndexCalibrationTimeoutMs = 120000U;
+  static constexpr uint32_t kMinimumZeroIndexCalibrationTimeoutMs = 10000U;
+  static constexpr uint32_t kMaximumZeroIndexCalibrationTimeoutMs = 600000U;
+  static constexpr uint16_t kDefaultZeroIndexCalibrationReversalPauseMs = 1000U;
+  static constexpr uint16_t kMinimumZeroIndexCalibrationReversalPauseMs = 250U;
+  static constexpr uint16_t kMaximumZeroIndexCalibrationReversalPauseMs = 10000U;
+  static constexpr uint16_t kDefaultZeroIndexCalibrationMaximumErrorTicks = 2U;
+  static constexpr uint16_t kMaximumZeroIndexCalibrationMaximumErrorTicks = 1000U;
 
   uint32_t counts_per_output_revolution = 184;
   int8_t direction = 1;
@@ -123,6 +138,19 @@ struct EncoderConfiguration {
   float zero_index_minimum_separation_revolutions =
       kDefaultZeroIndexMinimumSeparationRevolutions;
   uint32_t zero_position_offset_ticks = 0U;
+  uint8_t zero_index_reference_side = 0U;
+  uint8_t zero_index_hysteresis_calibrated = 0U;
+  int32_t clockwise_rising_correction_ticks = 0;
+  int32_t clockwise_falling_correction_ticks = 0;
+  float zero_index_calibration_duty = kDefaultZeroIndexCalibrationDuty;
+  uint32_t zero_index_calibration_timeout_ms =
+      kDefaultZeroIndexCalibrationTimeoutMs;
+  uint16_t zero_index_calibration_reversal_pause_ms =
+      kDefaultZeroIndexCalibrationReversalPauseMs;
+  uint16_t zero_index_calibration_maximum_error_ticks =
+      kDefaultZeroIndexCalibrationMaximumErrorTicks;
+  float zero_index_calibration_speed_rpm =
+      kDefaultZeroIndexCalibrationSpeedRpm;
 };
 
 struct CharacterizationConfiguration {
@@ -180,7 +208,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 21;
+  static constexpr uint32_t kSchemaVersion = 23;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};

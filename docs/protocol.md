@@ -83,7 +83,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0001` | [HEARTBEAT](#heartbeat-0x0001) | Device → host | 65 | Device identity, state, and health |
 | `0x0002` | [ACK](#ack-0x0002) | Device → host | 3 | Command result |
 | `0x0100` | [GET_SETTINGS](#get_settings-0x0100) | Host → device | 0 | Request current settings |
-| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 177 | Complete runtime settings snapshot |
+| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 203 | Complete runtime settings snapshot |
 | `0x0110` | [SET_CONTROLLER](#controller-gain-messages-0x0110-0x0114) | Host → device | 12 | Apply gains to RAM |
 | `0x0111` | [SET_DRIVER_DIAGNOSTIC](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable EN/DIAG protection |
 | `0x0112` | [SET_CURRENT_SENSE](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable overcurrent protection |
@@ -131,6 +131,8 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0302` | [CURRENT_CALIBRATION_STATUS](#current_calibration_status-0x0302) | Device → host | 27 | Current calibration progress/result |
 | `0x0303` | [ROTOR_ZERO_CALIBRATION](#rotor_zero_calibration-0x0303) | Host → device | 1 | Capture, save, or cancel the user rotor zero |
 | `0x0304` | [ROTOR_ZERO_CALIBRATION_STATUS](#rotor_zero_calibration_status-0x0304) | Device → host | 15 | Rotor-zero capture progress/result |
+| `0x0305` | [ZERO_INDEX_HYSTERESIS_CALIBRATION](#zero_index_hysteresis_calibration-0x0305) | Host → device | 2 | Run, review, select, save, or cancel bidirectional Hall-index calibration |
+| `0x0306` | [ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS](#zero_index_hysteresis_calibration_status-0x0306) | Device → host | 20 | Bidirectional Hall-index calibration progress/result |
 | `0x0310` | [CHARACTERIZATION_RESULT](#characterization_result-0x0310) | Device → host | 48 | Pending motor characterization result |
 | `0x0311` | [CHARACTERIZATION_ACTION](#characterization_action-0x0311) | Host → device | 1 | Save or discard the pending result |
 | `0x0312` | [CHARACTERIZATION_STATUS](#characterization_status-0x0312) | Device → host | 10 | Live characterization progress |
@@ -223,6 +225,15 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 171 | `velocity_estimator_method` | `u8` | `0`–`2` | 0 low-pass; 1 motor-model Kalman; 2 encoder-window acceleration prediction |
 | 172 | `velocity_acceleration_window_samples` | `u8` | 2–32 | Circular velocity-history length for estimator method 2 |
 | 173 | `rotor_zero_offset_ticks` | `u32` | encoder ticks | Wrapped tick distance from the accepted index to the user zero; valid `[0, counts_per_revolution)` |
+| 177 | `zero_index_reference_side` | `u8` | `0`, `1` | 0 selects CW rising / CCW falling; 1 selects CW falling / CCW rising |
+| 178 | `zero_index_hysteresis_calibrated` | `u8` | `0`, `1` | Whether saved direction corrections came from a completed calibration |
+| 179 | `clockwise_rising_correction_ticks` | `i32` | encoder ticks | Directed correction applied to the CCW falling edge for reference side 0 |
+| 183 | `clockwise_falling_correction_ticks` | `i32` | encoder ticks | Directed correction applied to the CCW rising edge for reference side 1 |
+| 187 | `zero_index_calibration_duty` | `f32` | 0–1 | Legacy schema-22 calibration duty retained for compatibility; schema 23 does not use it for motion control |
+| 191 | `zero_index_calibration_timeout_ms` | `u32` | ms | Maximum total calibration runtime |
+| 195 | `zero_index_calibration_reversal_pause_ms` | `u16` | ms | Stopped interval before reversing direction and minimum encoder-watchdog window while calibration motion starts |
+| 197 | `zero_index_calibration_maximum_error_ticks` | `u16` | encoder ticks | Maximum allowed CPR interval error and circular edge residual |
+| 199 | `zero_index_calibration_speed_rpm` | `f32` | RPM | Closed-loop speed magnitude used for both calibration directions; default 15 RPM |
 
 The encoder watchdog starts when desired velocity first exceeds its configured threshold. Each valid quadrature transition refreshes activity. Dropping below the threshold or stopping resets the watchdog window.
 
@@ -359,10 +370,11 @@ Starts a temporary constrained velocity step after a successful `ARM`.
 
 | Offset | Field name | Type | Units | Description |
 |---:|---|---|---|---|
-| 0 | `target_velocity_rad_s` | `f32` | rad/s | Requested step velocity |
+| 0 | `target_velocity_rad_s` | `f32` | rad/s | Nonzero signed step velocity; positive is forward and negative is reverse |
 | 4 | `duration_ms` | `u32` | ms | Test duration |
 
-Configured velocity, acceleration, and jerk limits remain active.
+The absolute target must not exceed the configured maximum velocity. Configured velocity,
+acceleration, and jerk limits remain active in both directions.
 
 ### START_VELOCITY_SEQUENCE (0x0206)
 
@@ -377,8 +389,9 @@ command is temporary and does not modify stored profiles or settings.
 | 5 | `reserved` | `u8[3]` | zero | Reserved for future use |
 | 8 | `levels_rad_s` | `f32[16]` | rad/s | Fixed-capacity velocity array; unused entries are zero |
 
-Every valid level must be finite, greater than zero, and no greater than the configured
-maximum velocity. `hold_ms × level_count` must not exceed 3,600,000 ms. After the final
+Every valid level must be finite and nonzero, and its absolute value must be no greater than
+the configured maximum velocity. Positive levels command forward motion and negative levels
+command reverse motion. `hold_ms × level_count` must not exceed 3,600,000 ms. After the final
 level, the normal acceleration and jerk limiter returns the target to zero before the
 machine stops and disarms. The payload is fixed at 72 bytes and remains covered by the
 normal frame CRC.
@@ -470,6 +483,43 @@ to degrees happens only after correction; there is no persisted or intermediate 
 | 3 | `current_position_deg` | `f32` | deg | Current corrected and offset rotor position |
 | 7 | `candidate_offset_ticks` | `u32` | encoder ticks | Pending wrapped tick offset when state is `2` |
 | 11 | `saved_offset_ticks` | `u32` | encoder ticks | Active persisted wrapped tick offset |
+
+### ZERO_INDEX_HYSTERESIS_CALIBRATION (0x0305)
+
+| Offset | Field name | Type | Values | Description |
+|---:|---|---|---|---|
+| 0 | `action` | `u8` | [ZERO_INDEX_HYSTERESIS_CALIBRATION_ACTION](#zero_index_hysteresis_calibration_action) | Workflow operation |
+| 1 | `reference_side` | `u8` | `0`, `1` | Candidate physical boundary: 0 CW rising / CCW falling; 1 CW falling / CCW rising |
+
+`START` is accepted only from the armed, fault-free state. The 500 Hz control path uses the
+incremental velocity controller to hold the configured calibration speed, positive for clockwise
+and negative for counterclockwise. The controller is reset before starting and across the stopped
+reversal so output accumulated in one direction cannot carry into the other. Firmware collects five valid rising/falling
+pairs clockwise, stops for the configured reversal pause, then collects five counterclockwise
+pairs. Consecutive same-edge counts must differ from configured CPR by no more than
+`zero_index_calibration_maximum_error_ticks`; circular edge residuals use the same limit. A
+timeout, missing encoder activity, unsafe state, invalid pass, stop, or fault leaves persisted
+calibration unchanged.
+
+After a valid run, firmware disarms and enters `VERIFY`. Both reference-side corrections are
+temporarily active in RAM. `SELECT_REFERENCE_SIDE` changes the temporary edge pair without a
+Preferences write so the user can rotate through the sensor manually in both directions. `SAVE`
+persists both corrections and the selected side; `CANCEL` restores the previously saved values.
+
+### ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS (0x0306)
+
+| Offset | Field name | Type | Units / values | Description |
+|---:|---|---|---|---|
+| 0 | `stage` | `u8` | [ZERO_INDEX_HYSTERESIS_CALIBRATION_STAGE](#zero_index_hysteresis_calibration_stage) | Active workflow stage |
+| 1 | `clockwise_count` | `u8` | 0–5 | Valid clockwise pass count |
+| 2 | `counterclockwise_count` | `u8` | 0–5 | Valid counterclockwise pass count |
+| 3 | `reference_side` | `u8` | `0`, `1` | Saved or temporary selected reference side |
+| 4 | `candidate_valid` | `u8` | `0`, `1` | Whether a complete candidate is being verified |
+| 5 | `last_result` | `u8` | [RESULT_CODE](#result_code) | Most recent workflow result |
+| 6 | `clockwise_rising_correction_ticks` | `i32` | encoder ticks | Candidate/saved side-0 CCW correction |
+| 10 | `clockwise_falling_correction_ticks` | `i32` | encoder ticks | Candidate/saved side-1 CCW correction |
+| 14 | `maximum_residual_ticks` | `u16` | encoder ticks | Worst circular repeatability residual in the candidate |
+| 16 | `current_position_deg` | `f32` | deg | Current position using the temporary or saved correction |
 
 ### CHARACTERIZATION_RESULT (0x0310)
 
@@ -586,6 +636,26 @@ Multiple bits may be set simultaneously.
 | 2 | `CANCEL` | Discard the active capture or pending candidate |
 | 3 | `REQUEST_STATUS` | Emit `ROTOR_ZERO_CALIBRATION_STATUS` |
 
+### ZERO_INDEX_HYSTERESIS_CALIBRATION_ACTION
+
+| Value | Name | Description |
+|---:|---|---|
+| 0 | `START` | Begin the guarded five-pass CW and five-pass CCW run |
+| 1 | `SELECT_REFERENCE_SIDE` | Apply one candidate edge pair temporarily for manual verification |
+| 2 | `SAVE` | Persist both candidate corrections and the selected reference side |
+| 3 | `CANCEL` | Stop/discard the candidate and restore saved correction |
+| 4 | `REQUEST_STATUS` | Emit `ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS` |
+
+### ZERO_INDEX_HYSTERESIS_CALIBRATION_STAGE
+
+| Value | Name |
+|---:|---|
+| 0 | `IDLE` |
+| 1 | `CLOCKWISE` |
+| 2 | `PAUSE_BEFORE_COUNTERCLOCKWISE` |
+| 3 | `COUNTERCLOCKWISE` |
+| 4 | `VERIFY` |
+
 ### CHARACTERIZATION_ACTION_FLAGS (bitmask)
 
 | Value | Name | Description |
@@ -654,10 +724,20 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 36 | `VELOCITY_ESTIMATOR_METHOD` | `0`, `1`, `2` | Select low-pass, characterized Kalman, or encoder-window acceleration prediction |
 | 37 | `VELOCITY_ACCELERATION_WINDOW_SAMPLES` | samples | Method-2 circular history length; valid 2–32 |
 | 38 | `ROTOR_ZERO_OFFSET_TICKS` | encoder ticks | Wrapped index-to-user-zero distance; integer in `[0, counts_per_revolution)` |
+| 39 | `ZERO_INDEX_REFERENCE_SIDE` | `0`, `1` | 0 CW rising / CCW falling; 1 CW falling / CCW rising |
+| 40 | `ZERO_INDEX_CALIBRATION_DUTY` | 0–1 | Legacy schema-22 value retained for compatibility; ignored by schema-23 calibration motion |
+| 41 | `ZERO_INDEX_CALIBRATION_TIMEOUT_MS` | ms | Total calibration timeout; valid 10,000–600,000 |
+| 42 | `ZERO_INDEX_CALIBRATION_REVERSAL_PAUSE_MS` | ms | Stopped reversal pause; valid 250–10,000 |
+| 43 | `ZERO_INDEX_CALIBRATION_MAXIMUM_ERROR_TICKS` | encoder ticks | Maximum CPR interval error and edge jitter |
+| 44 | `ZERO_INDEX_CALIBRATION_SPEED_RPM` | RPM | Closed-loop calibration speed magnitude; valid 1–120 and limited by maximum velocity |
 
 Lower current-filter cutoff reduces noise but delays software overcurrent detection. Hardware current limiting and a correctly sized fuse remain mandatory.
 
-For zero indexing, the first accepted pulse always establishes absolute phase. Subsequent pulses must satisfy both time and encoder-travel debounce. A correction gain of zero trusts encoder counts entirely after the initial reference; one snaps fully to each accepted pulse.
+For zero indexing, the direction-aware selector accepts complementary electrical edges representing
+one physical sensor boundary. The first accepted event establishes absolute phase. Subsequent
+events must satisfy both time and encoder-travel debounce, except that a genuine direction reversal
+may accept the complementary edge at the same boundary. A correction gain of zero trusts encoder
+counts entirely after the initial reference; one snaps fully to every accepted event.
 
 ## Operational sequences
 
@@ -706,7 +786,7 @@ Structured settings, telemetry, profiles, calibration status, and most actuator 
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 21.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 23.
 
 | Settings schema | Change |
 |---:|---|
@@ -721,8 +801,10 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 19 | Moved rotor zero into the count-domain index-correction target and removed averaging |
 | 20 | Persisted rotor zero as an integer wrapped encoder-tick offset; degrees are output-only |
 | 21 | Added a persistent good/broken bearing condition to the shared rotor setup |
+| 22 | Added direction-aware Hall edges, reversible reference-side corrections, and guarded bidirectional hysteresis calibration |
+| 23 | Replaced fixed-duty Hall calibration motion with configurable bidirectional closed-loop RPM control |
 
-The current loader explicitly migrates valid schema 4–20 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schema 20 defaults the new bearing condition to good. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-21 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–22 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-23 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.
@@ -734,5 +816,7 @@ that schema enabled implicitly. Other older settings migrate to method `0`.
 - The schema-15 estimator-method `SETTINGS` extension begins at byte 171.
 - The schema-16 acceleration-window `SETTINGS` extension begins at byte 172.
 - The schema-20 integer rotor-zero-offset `SETTINGS` field begins at byte 173.
+- The schema-22 zero-index hysteresis extension begins at byte 177.
+- The schema-23 closed-loop zero-index calibration speed begins at byte 199.
 
 Message IDs, packed field order, fixed-array capacities, and CRC behavior are protocol contracts. Any change to them requires synchronized firmware, browser, tests, and this document.

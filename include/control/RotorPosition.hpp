@@ -6,17 +6,25 @@
 
 namespace mm {
 
-__attribute__((always_inline)) inline bool shouldAcceptZeroIndexRise(
+__attribute__((always_inline)) inline bool zeroIndexMinimumIntervalElapsed(
+    const uint64_t timestamp_us, const uint64_t last_accepted_timestamp_us,
+    const uint32_t minimum_interval_us) {
+  return last_accepted_timestamp_us == 0U ||
+      timestamp_us < last_accepted_timestamp_us ||
+      timestamp_us - last_accepted_timestamp_us >= minimum_interval_us;
+}
+
+__attribute__((always_inline)) inline bool shouldAcceptZeroIndexEvent(
     const uint64_t timestamp_us, const uint64_t last_accepted_timestamp_us,
     const uint32_t minimum_interval_us, const int64_t encoder_count,
     const int64_t last_accepted_encoder_count,
     const uint32_t minimum_separation_counts) {
+  if (!zeroIndexMinimumIntervalElapsed(
+          timestamp_us, last_accepted_timestamp_us, minimum_interval_us)) {
+    return false;
+  }
   if (last_accepted_timestamp_us == 0U) {
     return true;
-  }
-  if (timestamp_us >= last_accepted_timestamp_us &&
-      timestamp_us - last_accepted_timestamp_us < minimum_interval_us) {
-    return false;
   }
   const uint64_t separation = encoder_count >= last_accepted_encoder_count
       ? static_cast<uint64_t>(encoder_count) -

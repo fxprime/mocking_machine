@@ -109,7 +109,7 @@ assert.match(readme, new RegExp(`${defaultCpr} counts/rev`));
 
 const pins = new Map([
   ["encoder_a", "Encoder A"], ["encoder_b", "Encoder B"],
-  ["zero_index", "Zero-index IR sensor"], ["motor_ina", "Motor direction A"],
+  ["zero_index", "Zero-index Hall sensor"], ["motor_ina", "Motor direction A"],
   ["motor_inb", "Motor direction B"], ["motor_pwm", "Motor PWM"],
   ["current_sense", "Current sense"], ["driver_diag", "Driver diagnostic"],
   ["supply_voltage_sense", "Driver VIN sense"]

@@ -6,7 +6,7 @@
 |---|---:|---|---|
 | Encoder A | 32 | Encoder A | Interrupt input; no boot-strapping conflict |
 | Encoder B | 33 | Encoder B | Interrupt input; no boot-strapping conflict |
-| Zero-index IR sensor | 13 | Sensor digital output | Rising-edge interrupt; 3.3 V only |
+| Zero-index Hall sensor | 13 | Sensor digital output | Both-edge interrupt; 3.3 V only |
 | Motor direction A | 25 | INA | Prefer a 74AHCT125 level buffer |
 | Motor direction B | 26 | INB | Prefer a 74AHCT125 level buffer |
 | Motor PWM | 27 | PWM | 20 kHz, 11-bit LEDC; prefer a 74AHCT125 buffer |
@@ -16,16 +16,18 @@
 
 All pins live in `MachineSettings`, but the current serial parameter API does not expose pin changes. Changing this map requires a firmware-default change (or a compatible persisted-settings migration) and rebuild.
 
-The zero-index input accepts the first rising edge as the rotor reference and captures both
-its microsecond timestamp and the current quadrature count. Later rising edges inside
+The zero-index input captures rising and falling edge timestamps and quadrature counts. Runtime
+selection pairs CW rising with CCW falling, or CW falling with CCW rising, so both directions
+refer to one physical side of the magnet window. Same-edge events inside
 `zero_index_min_interval_us` (5,000 µs by default) are treated as sensor bounce. This filter
 does not reset, suppress, or otherwise modify the GPIO32/33 encoder count. At the configured
 150 rad/s maximum, one revolution is about 41.9 ms, so the 5 ms default remains comfortably
 below the expected one-pulse-per-revolution interval.
 
-After the first reference, another zero edge is accepted only after both the 5 ms debounce and
+After the first selected reference, another zero event is accepted only after both the 5 ms debounce and
 the default 0.50-revolution encoder separation have elapsed. This rejects a long/noisy optical
-pulse even when another rising edge occurs after the time-only debounce. Rejected edges appear
+pulse even when another edge occurs after the time-only debounce. A genuine direction reversal
+may accept the complementary edge at the same physical boundary. Rejected edges appear
 only in the rejected-edge diagnostic count; they never advance the accepted zero number.
 
 The default `zero_index_correction_gain` of 0.10 applies only 10%
@@ -100,6 +102,24 @@ Firmware rejects VIN calibration when the ADC input is above 2.8 V because that 
 6. Secure the unloaded motor in the final guard and start **Calibration → Motor characterization**. The equivalent terminal sequence is `arm` followed by `characterize start CONFIRM_UNLOADED`.
 7. Tune at low maximum duty and acceleration.
 8. Add a small imbalance only after unloaded behavior, emergency stop, enclosure, and mounting are validated.
+
+### Zero-index hysteresis calibration procedure
+
+1. Remove imbalance weights, close the guard, confirm the calibration speed and CPR settings, and
+   keep the emergency stop accessible.
+2. In **Calibration → Zero-index hysteresis**, select the initial reference side and start the
+   guarded run. The browser arms first; firmware then commands five valid CW passes.
+3. Firmware stops for the configured reversal pause and commands five valid CCW passes. Each
+   same-edge interval must match CPR within the configured error tolerance. Missing counts,
+   excessive jitter, timeout, stop, or a safety fault rejects the candidate without saving.
+4. When the machine disarms into **Verify manually**, turn the rotor slowly through the sensor in
+   both directions. Confirm the same marked physical position returns to the same corrected angle.
+5. If desired, switch between **CW rising / CCW falling** and **CW falling / CCW rising**. This
+   applies the candidate in RAM only.
+6. Save the repeatable side. Firmware persists both direction corrections and the selected side,
+   allowing the side to be reversed later without repeating the measurement.
+7. Perform rotor-position-zero calibration afterward so the user zero is relative to the
+   direction-corrected canonical index.
 
 ### Rotor zero calibration procedure
 
