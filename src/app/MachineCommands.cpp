@@ -479,6 +479,12 @@ void MachineApplication::commandCharacterize(const int argc, char* argv[]) {
   next_characterization_status_us_ = 0U;
   characterization_duty_ = settings_.characterization.duty_step;
   characterization_motion_samples_ = 0;
+  characterization_breakaway_start_count_ = encoder_.count();
+  characterization_motion_confirmed_ = false;
+  characterization_breakaway_trial_pause_ = false;
+  characterization_breakaway_trials_.reset();
+  characterization_full_duty_trial_pause_ = false;
+  characterization_full_duty_trials_.reset();
   characterization_peak_velocity_ = 0.0F;
   characterization_deadline_us_ = static_cast<uint64_t>(esp_timer_get_time()) +
       static_cast<uint64_t>(settings_.characterization.settle_ms) * 1000ULL;

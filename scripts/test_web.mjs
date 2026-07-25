@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { configurationPreparation, profilePreparation, resultDescription } from "../web/protocol-status.mjs";
 import { calculateStepMetrics, symmetricNiceLimit } from "../web/response-metrics.mjs";
+import {
+  commitFlexibleNumberInput,
+  enableFlexibleNumberInput,
+  snapNumberToStep
+} from "../web/numeric-input.mjs";
 
 assert.equal(profilePreparation(0, false).firstCommand, "stop");
 assert.equal(profilePreparation(1, false).firstCommand, "stop");
@@ -9,6 +14,23 @@ assert.equal(profilePreparation(2, false).firstCommand, "stop");
 assert.match(profilePreparation(3, false).blocked, /fault/);
 assert.match(configurationPreparation(0, true, "parameters").blocked, /characterization/);
 assert.match(resultDescription(4), /safely disarmed/);
+assert.equal(snapNumberToStep(0.454, 0.01, 0, 10), 0.45);
+assert.equal(snapNumberToStep(0.45678, 0.01, 0, 10), 0.46);
+assert.equal(snapNumberToStep(-0.45678, 0.01, -10, 10), -0.46);
+const flexibleInput = {
+  value: "0.45678",
+  step: "0.01",
+  min: "0",
+  max: "1",
+  dataset: {}
+};
+enableFlexibleNumberInput(flexibleInput);
+assert.equal(flexibleInput.step, "any");
+assert.equal(commitFlexibleNumberInput(flexibleInput), 0.46);
+assert.equal(flexibleInput.value, "0.46");
+flexibleInput.value = "";
+assert.ok(Number.isNaN(commitFlexibleNumberInput(flexibleInput)));
+assert.equal(flexibleInput.value, "");
 
 const appSource = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../web/index.html", import.meta.url), "utf8");

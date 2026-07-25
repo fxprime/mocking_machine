@@ -16,7 +16,8 @@ class MotionLimiter {
   SafetyConfiguration configuration_{};
   float velocity_rad_s_ = 0.0F;
   float acceleration_rad_s2_ = 0.0F;
+  float previous_target_velocity_rad_s_ = 0.0F;
+  bool target_initialized_ = false;
 };
 
 }  // namespace mm
-

@@ -49,6 +49,76 @@ void test_characterization_dynamics_uses_robust_quantile() {
   TEST_ASSERT_FLOAT_WITHIN(0.1F, 10.0F, estimator.value());
 }
 
+void test_breakaway_trials_retain_highest_duty() {
+  characterization::BreakawayTrialAccumulator trials;
+  constexpr uint8_t required_trials = 5U;
+  TEST_ASSERT_TRUE(trials.add(0.18F));
+  TEST_ASSERT_TRUE(trials.add(0.21F));
+  TEST_ASSERT_TRUE(trials.add(0.19F));
+  TEST_ASSERT_TRUE(trials.add(0.23F));
+  TEST_ASSERT_FALSE(trials.complete(required_trials));
+  TEST_ASSERT_TRUE(trials.add(0.20F));
+  TEST_ASSERT_TRUE(trials.complete(required_trials));
+  TEST_ASSERT_EQUAL_UINT8(required_trials, trials.count());
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.23F, trials.maximumDuty());
+
+  trials.reset();
+  TEST_ASSERT_EQUAL_UINT8(0U, trials.count());
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.0F, trials.maximumDuty());
+}
+
+void test_full_duty_trials_retain_highest_measurements() {
+  characterization::FullDutyTrialAccumulator trials;
+  constexpr uint8_t required_trials = 5U;
+  TEST_ASSERT_TRUE(trials.add(100.0F, 12.0F, 120.0F, 110.0F, 0.20F));
+  TEST_ASSERT_TRUE(trials.add(120.0F, 11.0F, 130.0F, 132.0F, 0.30F));
+  TEST_ASSERT_TRUE(trials.add(110.0F, 15.0F, 125.0F, 121.0F, 0.25F));
+  TEST_ASSERT_TRUE(trials.add(115.0F, 13.0F, 150.0F, 126.0F, 0.27F));
+  TEST_ASSERT_FALSE(trials.complete(required_trials));
+  TEST_ASSERT_TRUE(trials.add(105.0F, 14.0F, 140.0F, 115.0F, 0.22F));
+  TEST_ASSERT_TRUE(trials.complete(required_trials));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, 120.0F, trials.maximumVelocityRadS());
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, 15.0F, trials.maximumAccelerationRadS2());
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, 150.0F, trials.maximumJerkRadS3());
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, 132.0F, trials.modelGainRadSPerDuty());
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.001F, 0.30F, trials.modelTimeConstantS());
+}
+
+void test_breakaway_requires_one_correctly_directed_output_revolution() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 144U;
+  encoder.direction = 1;
+
+  TEST_ASSERT_TRUE(characterization::breakawayVelocityMatchesDirection(
+      1.0F, 1, 1.0F));
+  TEST_ASSERT_FALSE(characterization::breakawayTravelComplete(
+      1000, 1143, 1, encoder));
+  TEST_ASSERT_TRUE(characterization::breakawayTravelComplete(
+      1000, 1144, 1, encoder));
+  TEST_ASSERT_FALSE(characterization::breakawayTravelComplete(
+      1000, 856, 1, encoder));
+}
+
+void test_breakaway_travel_handles_reverse_and_inverted_encoder() {
+  EncoderConfiguration encoder{};
+  encoder.counts_per_output_revolution = 144U;
+  encoder.direction = -1;
+
+  TEST_ASSERT_TRUE(characterization::breakawayVelocityMatchesDirection(
+      -1.0F, -1, 1.0F));
+  TEST_ASSERT_FALSE(characterization::breakawayVelocityMatchesDirection(
+      1.0F, -1, 1.0F));
+  TEST_ASSERT_TRUE(characterization::breakawayTravelComplete(
+      1000, 1144, -1, encoder));
+  TEST_ASSERT_FALSE(characterization::breakawayTravelComplete(
+      1000, 856, -1, encoder));
+}
+
 void test_motor_identifier_recovers_first_order_step_model() {
   characterization::FirstOrderMotorIdentifier identifier;
   identifier.reset();
@@ -305,6 +375,55 @@ void test_motion_limiter_honors_acceleration_and_jerk() {
   limiter.reset();
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 0.2F, limiter.update(100.0F, 0.1F));
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 2.0F, limiter.acceleration());
+}
+
+void test_motion_limiter_tracks_feasible_ramp_without_ripple() {
+  SafetyConfiguration configuration{};
+  configuration.max_velocity_rad_s = 100.0F;
+  configuration.max_acceleration_rad_s2 = 10.0F;
+  configuration.max_jerk_rad_s3 = 20.0F;
+  MotionLimiter limiter;
+  limiter.configure(configuration);
+  limiter.reset();
+
+  constexpr float dt_s = 0.002F;
+  constexpr float ramp_acceleration_rad_s2 = 5.0F;
+  float previous_acceleration = limiter.acceleration();
+  float maximum_settled_error = 0.0F;
+  for (uint32_t sample = 0U; sample <= 2500U; ++sample) {
+    const float time_s = static_cast<float>(sample) * dt_s;
+    const float target =
+        ramp_acceleration_rad_s2 * time_s;
+    const float output = limiter.update(target, dt_s);
+    TEST_ASSERT_LESS_OR_EQUAL_FLOAT(
+        configuration.max_jerk_rad_s3 * dt_s + 0.0001F,
+        std::fabs(limiter.acceleration() - previous_acceleration));
+    previous_acceleration = limiter.acceleration();
+    if (time_s >= 2.0F) {
+      maximum_settled_error = std::max(
+          maximum_settled_error, std::fabs(target - output));
+    }
+  }
+  TEST_ASSERT_LESS_THAN_FLOAT(0.02F, maximum_settled_error);
+
+  limiter.reset();
+  previous_acceleration = limiter.acceleration();
+  maximum_settled_error = 0.0F;
+  for (uint32_t sample = 0U; sample <= 2500U; ++sample) {
+    const float time_s = static_cast<float>(sample) * dt_s;
+    const float target =
+        -ramp_acceleration_rad_s2 * time_s;
+    const float output = limiter.update(target, dt_s);
+    TEST_ASSERT_LESS_OR_EQUAL_FLOAT(
+        configuration.max_jerk_rad_s3 * dt_s + 0.0001F,
+        std::fabs(limiter.acceleration() - previous_acceleration));
+    previous_acceleration = limiter.acceleration();
+    if (time_s >= 2.0F) {
+      maximum_settled_error = std::max(
+          maximum_settled_error, std::fabs(target - output));
+    }
+  }
+  TEST_ASSERT_LESS_THAN_FLOAT(0.02F, maximum_settled_error);
 }
 
 void test_velocity_estimator_uses_output_shaft_cpr() {
@@ -879,6 +998,10 @@ int main(int, char**) {
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_characterization_dynamics_estimates_constant_acceleration);
   RUN_TEST(test_characterization_dynamics_uses_robust_quantile);
+  RUN_TEST(test_breakaway_trials_retain_highest_duty);
+  RUN_TEST(test_full_duty_trials_retain_highest_measurements);
+  RUN_TEST(test_breakaway_requires_one_correctly_directed_output_revolution);
+  RUN_TEST(test_breakaway_travel_handles_reverse_and_inverted_encoder);
   RUN_TEST(test_motor_identifier_recovers_first_order_step_model);
   RUN_TEST(test_create_profile_frame_crc_vector);
   RUN_TEST(test_load_configuration_frame_crc_vector);
@@ -898,6 +1021,7 @@ int main(int, char**) {
   RUN_TEST(test_two_point_current_calibration_rejects_insufficient_span);
   RUN_TEST(test_current_calibration_capture_averages_incrementally);
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
+  RUN_TEST(test_motion_limiter_tracks_feasible_ramp_without_ripple);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
   RUN_TEST(test_velocity_estimator_predicts_from_characterized_motor_model);

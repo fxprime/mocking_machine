@@ -14,6 +14,8 @@ import { readBaudPreference, writeBaudPreference } from "./baud-preference.mjs";
 import { CommunicationMetrics } from "./communication-metrics.mjs";
 import { createParameterCsv, parseParameterCsv } from "./parameter-csv.mjs";
 import { createVelocityStepSequence, encodeVelocityStepSequence } from "./velocity-step-sequence.mjs";
+import { commitFlexibleNumberInput, enableFlexibleNumberInput } from "./numeric-input.mjs";
+import { JerkLimitedVelocityLimiter } from "./motion-limiter.mjs";
 
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
@@ -113,6 +115,14 @@ let recordedBrokenBearing = false;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const $ = id => document.getElementById(id);
+
+document.querySelectorAll('input[type="number"][step]').forEach(input =>
+  enableFlexibleNumberInput(input));
+document.addEventListener("change", event => {
+  if (event.target?.matches?.('input[type="number"][data-supported-step]')) {
+    commitFlexibleNumberInput(event.target);
+  }
+}, true);
 
 function localPreferenceStorage() {
   try { return globalThis.localStorage; } catch { return undefined; }
@@ -1766,7 +1776,8 @@ function openParameterEditor(key) {
   $("parameterEditorDescription").textContent = definition.description;
   const input = $("parameterEditorValue");
   input.value = typeof settings[key] === "boolean" ? (settings[key] ? 1 : 0) : formatNumber(settings[key], definition.decimals);
-  input.step = definition.step; input.min = definition.min; input.max = definition.max;
+  input.min = definition.min; input.max = definition.max;
+  enableFlexibleNumberInput(input, definition.step);
   $("parameterEditorRange").textContent = `Allowed range: ${formatNumber(definition.min, definition.decimals)} to ${formatNumber(definition.max, definition.decimals)}`;
   $("parameterEditorDialog").showModal(); input.focus(); input.select();
 }
@@ -2132,16 +2143,11 @@ function constrainedProfilePreview() {
   const steps = 500;
   const dt = editingProfile.duration / steps;
   const vmax = Number(settings.vmax), amax = Number(settings.amax), jmax = Number(settings.jmax);
-  let velocity = 0, acceleration = 0;
+  const limiter = new JerkLimitedVelocityLimiter(vmax, amax, jmax);
   for (let index = 0; index <= steps; index++) {
     const time = index * dt;
     const target = Math.min(vmax, Math.max(0, desiredProfileVelocity(time)));
-    const error = target - velocity;
-    const desiredAcceleration = Math.min(amax, Math.max(-amax, error / Math.max(dt, 0.000001)));
-    acceleration += Math.min(jmax * dt, Math.max(-jmax * dt, desiredAcceleration - acceleration));
-    const step = acceleration * dt;
-    if (Math.abs(step) >= Math.abs(error)) { velocity = target; acceleration = 0; } else velocity += step;
-    result.push({ time, velocity });
+    result.push({ time, velocity: limiter.update(target, dt) });
   }
   return result;
 }
@@ -2506,7 +2512,7 @@ function renderCharacterizationResult(result) {
 }
 
 function renderCharacterizationStatus(status) {
-  const stages = ["Stopped", "Finding forward breakaway PWM", "Pausing before reverse test", "Finding reverse breakaway PWM", "Pausing before forward maximum", "Measuring maximum forward velocity", "Pausing before reverse maximum", "Measuring maximum reverse velocity"];
+  const stages = ["Stopped", "Finding forward breakaway PWM (5 start trials)", "Pausing before reverse test", "Finding reverse breakaway PWM (5 start trials)", "Pausing before forward maximum", "Measuring forward velocity and dynamics (5 start trials)", "Pausing before reverse maximum", "Measuring reverse velocity and dynamics (5 start trials)"];
   const wasRunning = characterizationRunning;
   characterizationRunning = status.stage !== 0;
   if (characterizationRunning && !wasRunning) characterizationSamples = [];
@@ -2755,7 +2761,8 @@ $("parameterRows").addEventListener("click", event => {
 $("parameterEditorForm").addEventListener("submit", async event => {
   if (event.submitter?.value !== "save") return;
   event.preventDefault();
-  const definition = parameterDefinitions[editingParameterKey], value = Number($("parameterEditorValue").value);
+  const definition = parameterDefinitions[editingParameterKey];
+  const value = commitFlexibleNumberInput($("parameterEditorValue"));
   if (!definition || !Number.isFinite(value) || value < definition.min || value > definition.max || (editingParameterKey === "direction" && value !== -1 && value !== 1)) return toast("Enter a value inside the allowed range.");
   const payload = new Uint8Array(7), view = new DataView(payload.buffer);
   view.setUint16(0, definition.id, true); view.setFloat32(2, value, true); payload[6] = 1;

@@ -982,33 +982,127 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
     characterization_deadline_us_ = scheduled_us +
         static_cast<uint64_t>(settings_.characterization.reversal_pause_ms) * 1000ULL;
     characterization_motion_samples_ = 0;
+    characterization_motion_confirmed_ = false;
+    characterization_breakaway_start_count_ = telemetry_.encoder_count;
+    characterization_breakaway_trial_pause_ = false;
+    characterization_full_duty_trial_pause_ = false;
   };
+  const auto service_full_duty_trial_pause =
+      [this, scheduled_us]() {
+        if (!characterization_full_duty_trial_pause_) {
+          return false;
+        }
+        motor_.stop();
+        if (scheduled_us < characterization_deadline_us_ ||
+            std::fabs(telemetry_.measured_velocity_rad_s) >=
+                settings_.characterization.motion_threshold_rad_s) {
+          return true;
+        }
+        characterization_full_duty_trial_pause_ = false;
+        characterization_peak_velocity_ = 0.0F;
+        characterization_dynamics_estimator_.reset();
+        characterization_model_identifier_.reset();
+        characterization_deadline_us_ = scheduled_us +
+            static_cast<uint64_t>(
+                settings_.characterization.maximum_hold_ms) *
+                1000ULL;
+        return true;
+      };
 
   switch (characterization_stage_) {
     case CharacterizationStage::Idle:
       return;
     case CharacterizationStage::ForwardDeadband:
     case CharacterizationStage::ReverseDeadband: {
-      motor_.command(characterization_duty_);
+      if (characterization_breakaway_trial_pause_) {
+        motor_.stop();
+        if (scheduled_us < characterization_deadline_us_ ||
+            std::fabs(telemetry_.measured_velocity_rad_s) >=
+                settings_.characterization.motion_threshold_rad_s) {
+          return;
+        }
+        characterization_breakaway_trial_pause_ = false;
+        characterization_breakaway_start_count_ =
+            telemetry_.encoder_count;
+        characterization_motion_samples_ = 0U;
+        characterization_motion_confirmed_ = false;
+        characterization_deadline_us_ = scheduled_us +
+            static_cast<uint64_t>(
+                settings_.characterization.settle_ms) *
+                1000ULL;
+        return;
+      }
+      motor_.commandRaw(characterization_duty_);
       if (scheduled_us < characterization_deadline_us_) {
         return;
       }
-      if (std::fabs(telemetry_.measured_velocity_rad_s) >=
-          settings_.characterization.motion_threshold_rad_s) {
-        ++characterization_motion_samples_;
+      const int8_t commanded_direction =
+          characterization_stage_ == CharacterizationStage::ForwardDeadband
+              ? 1
+              : -1;
+      const bool moving_in_commanded_direction =
+          characterization::breakawayVelocityMatchesDirection(
+              telemetry_.measured_velocity_rad_s, commanded_direction,
+              settings_.characterization.motion_threshold_rad_s);
+      if (moving_in_commanded_direction) {
+        if (characterization_motion_samples_ <
+            settings_.characterization.consecutive_motion_samples) {
+          ++characterization_motion_samples_;
+        }
+        characterization_motion_confirmed_ =
+            characterization_motion_samples_ >=
+            settings_.characterization.consecutive_motion_samples;
       } else {
-        characterization_motion_samples_ = 0;
+        if (characterization_motion_samples_ > 0U) {
+          --characterization_motion_samples_;
+          return;
+        }
+        characterization_motion_confirmed_ = false;
       }
-      if (characterization_motion_samples_ >=
-          settings_.characterization.consecutive_motion_samples) {
-        if (characterization_stage_ == CharacterizationStage::ForwardDeadband) {
-          characterization_candidate_.start_duty_forward = std::fabs(characterization_duty_);
+      if (characterization_motion_confirmed_ &&
+          characterization::breakawayTravelComplete(
+              characterization_breakaway_start_count_,
+              telemetry_.encoder_count, commanded_direction,
+              settings_.encoder)) {
+        const float completed_duty =
+            std::fabs(characterization_duty_);
+        if (!characterization_breakaway_trials_.add(completed_duty)) {
+          faults_ |= FaultInvalidConfiguration;
+          transitionToStopped();
+          state_ = RunState::Fault;
+          return;
+        }
+        if (!characterization_breakaway_trials_.complete(
+                kCharacterizationTrialsPerDirection)) {
+          motor_.stop();
+          characterization_duty_ =
+              static_cast<float>(commanded_direction) *
+              settings_.characterization.duty_step;
+          characterization_motion_samples_ = 0U;
+          characterization_motion_confirmed_ = false;
+          characterization_breakaway_trial_pause_ = true;
+          characterization_deadline_us_ = scheduled_us +
+              static_cast<uint64_t>(
+                  settings_.characterization.reversal_pause_ms) *
+                  1000ULL;
+          return;
+        }
+        if (characterization_stage_ ==
+            CharacterizationStage::ForwardDeadband) {
+          characterization_candidate_.start_duty_forward =
+              characterization_breakaway_trials_.maximumDuty();
+          characterization_breakaway_trials_.reset();
           characterization_duty_ = -settings_.characterization.duty_step;
           pause(CharacterizationStage::PauseBeforeReverseDeadband);
         } else {
-          characterization_candidate_.start_duty_reverse = std::fabs(characterization_duty_);
+          characterization_candidate_.start_duty_reverse =
+              characterization_breakaway_trials_.maximumDuty();
+          characterization_breakaway_trials_.reset();
           pause(CharacterizationStage::PauseBeforeForwardMaximum);
         }
+        return;
+      }
+      if (moving_in_commanded_direction) {
         return;
       }
       characterization_duty_ +=
@@ -1023,6 +1117,8 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
       }
       characterization_deadline_us_ = scheduled_us +
           static_cast<uint64_t>(settings_.characterization.settle_ms) * 1000ULL;
+      characterization_breakaway_start_count_ = telemetry_.encoder_count;
+      characterization_motion_samples_ = 0;
       return;
     }
     case CharacterizationStage::PauseBeforeReverseDeadband:
@@ -1031,12 +1127,18 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
         characterization_stage_ = CharacterizationStage::ReverseDeadband;
         characterization_deadline_us_ = scheduled_us +
             static_cast<uint64_t>(settings_.characterization.settle_ms) * 1000ULL;
+        characterization_breakaway_start_count_ = telemetry_.encoder_count;
+        characterization_motion_samples_ = 0;
+        characterization_motion_confirmed_ = false;
       }
       return;
     case CharacterizationStage::PauseBeforeForwardMaximum:
       motor_.stop();
-      if (scheduled_us >= characterization_deadline_us_) {
+      if (scheduled_us >= characterization_deadline_us_ &&
+          std::fabs(telemetry_.measured_velocity_rad_s) <
+              settings_.characterization.motion_threshold_rad_s) {
         characterization_stage_ = CharacterizationStage::ForwardMaximum;
+        characterization_full_duty_trials_.reset();
         characterization_peak_velocity_ = 0.0F;
         characterization_dynamics_estimator_.reset();
         characterization_model_identifier_.reset();
@@ -1044,8 +1146,11 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
       return;
-    case CharacterizationStage::ForwardMaximum:
-      motor_.command(settings_.safety.max_duty);
+    case CharacterizationStage::ForwardMaximum: {
+      if (service_full_duty_trial_pause()) {
+        return;
+      }
+      motor_.commandRaw(settings_.safety.max_duty);
       characterization_dynamics_estimator_.update(
           telemetry_.measured_velocity_rad_s,
           static_cast<float>(settings_.control.period_us) * 0.000001F);
@@ -1061,26 +1166,53 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
           state_ = RunState::Fault;
           return;
         }
-        characterization_candidate_.max_velocity_forward_rad_s = characterization_peak_velocity_;
-        characterization_dynamics_candidate_.acceleration_forward_rad_s2 =
-            characterization_dynamics_estimator_.accelerationRadS2();
-        characterization_dynamics_candidate_.jerk_forward_rad_s3 =
-            characterization_dynamics_estimator_.jerkRadS3();
+        float model_gain_rad_s_per_duty = 0.0F;
+        float model_time_constant_s = 0.0F;
         if (!characterization_model_identifier_.result(
-                characterization_model_candidate_.velocity_gain_forward_rad_s_per_duty,
-                characterization_model_candidate_.time_constant_forward_s)) {
+                model_gain_rad_s_per_duty,
+                model_time_constant_s) ||
+            !characterization_full_duty_trials_.add(
+                characterization_peak_velocity_,
+                characterization_dynamics_estimator_.accelerationRadS2(),
+                characterization_dynamics_estimator_.jerkRadS3(),
+                model_gain_rad_s_per_duty, model_time_constant_s)) {
           faults_ |= FaultInvalidConfiguration;
           transitionToStopped();
           state_ = RunState::Fault;
           return;
         }
+        if (!characterization_full_duty_trials_.complete(
+                kCharacterizationTrialsPerDirection)) {
+          motor_.stop();
+          characterization_full_duty_trial_pause_ = true;
+          characterization_deadline_us_ = scheduled_us +
+              static_cast<uint64_t>(
+                  settings_.characterization.reversal_pause_ms) *
+                  1000ULL;
+          return;
+        }
+        characterization_candidate_.max_velocity_forward_rad_s =
+            characterization_full_duty_trials_.maximumVelocityRadS();
+        characterization_dynamics_candidate_.acceleration_forward_rad_s2 =
+            characterization_full_duty_trials_.maximumAccelerationRadS2();
+        characterization_dynamics_candidate_.jerk_forward_rad_s3 =
+            characterization_full_duty_trials_.maximumJerkRadS3();
+        characterization_model_candidate_.velocity_gain_forward_rad_s_per_duty =
+            characterization_full_duty_trials_.modelGainRadSPerDuty();
+        characterization_model_candidate_.time_constant_forward_s =
+            characterization_full_duty_trials_.modelTimeConstantS();
+        characterization_full_duty_trials_.reset();
         pause(CharacterizationStage::PauseBeforeReverseMaximum);
       }
       return;
+    }
     case CharacterizationStage::PauseBeforeReverseMaximum:
       motor_.stop();
-      if (scheduled_us >= characterization_deadline_us_) {
+      if (scheduled_us >= characterization_deadline_us_ &&
+          std::fabs(telemetry_.measured_velocity_rad_s) <
+              settings_.characterization.motion_threshold_rad_s) {
         characterization_stage_ = CharacterizationStage::ReverseMaximum;
+        characterization_full_duty_trials_.reset();
         characterization_peak_velocity_ = 0.0F;
         characterization_dynamics_estimator_.reset();
         characterization_model_identifier_.reset();
@@ -1088,8 +1220,11 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
             static_cast<uint64_t>(settings_.characterization.maximum_hold_ms) * 1000ULL;
       }
       return;
-    case CharacterizationStage::ReverseMaximum:
-      motor_.command(-settings_.safety.max_duty);
+    case CharacterizationStage::ReverseMaximum: {
+      if (service_full_duty_trial_pause()) {
+        return;
+      }
+      motor_.commandRaw(-settings_.safety.max_duty);
       characterization_dynamics_estimator_.update(
           telemetry_.measured_velocity_rad_s,
           static_cast<float>(settings_.control.period_us) * 0.000001F);
@@ -1105,24 +1240,48 @@ void MachineApplication::updateCharacterization(const uint64_t scheduled_us) {
           state_ = RunState::Fault;
           return;
         }
-        characterization_candidate_.max_velocity_reverse_rad_s = characterization_peak_velocity_;
-        characterization_dynamics_candidate_.acceleration_reverse_rad_s2 =
-            characterization_dynamics_estimator_.accelerationRadS2();
-        characterization_dynamics_candidate_.jerk_reverse_rad_s3 =
-            characterization_dynamics_estimator_.jerkRadS3();
+        float model_gain_rad_s_per_duty = 0.0F;
+        float model_time_constant_s = 0.0F;
         if (!characterization_model_identifier_.result(
-                characterization_model_candidate_.velocity_gain_reverse_rad_s_per_duty,
-                characterization_model_candidate_.time_constant_reverse_s)) {
+                model_gain_rad_s_per_duty,
+                model_time_constant_s) ||
+            !characterization_full_duty_trials_.add(
+                characterization_peak_velocity_,
+                characterization_dynamics_estimator_.accelerationRadS2(),
+                characterization_dynamics_estimator_.jerkRadS3(),
+                model_gain_rad_s_per_duty, model_time_constant_s)) {
           faults_ |= FaultInvalidConfiguration;
           transitionToStopped();
           state_ = RunState::Fault;
           return;
         }
+        if (!characterization_full_duty_trials_.complete(
+                kCharacterizationTrialsPerDirection)) {
+          motor_.stop();
+          characterization_full_duty_trial_pause_ = true;
+          characterization_deadline_us_ = scheduled_us +
+              static_cast<uint64_t>(
+                  settings_.characterization.reversal_pause_ms) *
+                  1000ULL;
+          return;
+        }
+        characterization_candidate_.max_velocity_reverse_rad_s =
+            characterization_full_duty_trials_.maximumVelocityRadS();
+        characterization_dynamics_candidate_.acceleration_reverse_rad_s2 =
+            characterization_full_duty_trials_.maximumAccelerationRadS2();
+        characterization_dynamics_candidate_.jerk_reverse_rad_s3 =
+            characterization_full_duty_trials_.maximumJerkRadS3();
+        characterization_model_candidate_.velocity_gain_reverse_rad_s_per_duty =
+            characterization_full_duty_trials_.modelGainRadSPerDuty();
+        characterization_model_candidate_.time_constant_reverse_s =
+            characterization_full_duty_trials_.modelTimeConstantS();
+        characterization_full_duty_trials_.reset();
         characterization_result_pending_ = true;
         characterization_notification_pending_ = true;
         transitionToStopped();
       }
       return;
+    }
   }
 }
 

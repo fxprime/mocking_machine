@@ -540,7 +540,8 @@ Pending motor characterization result. It remains in RAM and is resent when stre
 | 40 | `time_constant_forward_s` | `f32` | s | Identified forward first-order time constant |
 | 44 | `time_constant_reverse_s` | `f32` | s | Identified reverse first-order time constant |
 
-Dynamics limits use the configured online low-pass filter and robust quantile independently in each full-duty direction. The motor model is fitted allocation-free by least squares to `v[k+1] = a*v[k] + b*u[k]`; firmware converts `a,b` to steady-state gain and time constant.
+Dynamics limits use the configured online low-pass filter and robust quantile independently in each full-duty direction. Firmware performs five independent start-from-rest full-duty trials per direction and retains the highest peak velocity, robust acceleration, and robust jerk. The motor model is fitted allocation-free by least squares to `v[k+1] = a*v[k] + b*u[k]`; firmware converts `a,b` to steady-state gain and time constant and retains the fitted pair from the trial with the highest peak velocity.
+Each breakaway value is raw PWM without saved deadband compensation. Firmware performs five independent start-from-rest trials in each direction. Every trial must report motion in the commanded direction for at least one complete output revolution (`counts_per_output_revolution`) at unchanged PWM; the result retains the highest successful duty separately for forward and reverse.
 
 ### CHARACTERIZATION_ACTION (0x0311)
 

@@ -7,6 +7,7 @@
 #include "control/IncrementalVelocityController.hpp"
 #include "control/CurrentCalibration.hpp"
 #include "control/CharacterizationDynamics.hpp"
+#include "control/CharacterizationSettings.hpp"
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
@@ -141,6 +142,14 @@ class MachineApplication final {
   float characterization_duty_ = 0.0F;
   float characterization_peak_velocity_ = 0.0F;
   uint8_t characterization_motion_samples_ = 0;
+  int64_t characterization_breakaway_start_count_ = 0;
+  bool characterization_motion_confirmed_ = false;
+  bool characterization_breakaway_trial_pause_ = false;
+  characterization::BreakawayTrialAccumulator
+      characterization_breakaway_trials_{};
+  bool characterization_full_duty_trial_pause_ = false;
+  characterization::FullDutyTrialAccumulator
+      characterization_full_duty_trials_{};
   MotorCharacteristics characterization_candidate_{};
   characterization::DynamicsEstimator characterization_dynamics_estimator_{};
   characterization::FirstOrderMotorIdentifier characterization_model_identifier_{};
@@ -149,6 +158,7 @@ class MachineApplication final {
   bool characterization_result_pending_ = false;
   bool characterization_notification_pending_ = false;
   bool characterization_status_pending_ = false;
+  static constexpr uint8_t kCharacterizationTrialsPerDirection = 5U;
   CurrentCalibrationPoint current_calibration_points_[2]{};
   CurrentCalibrationResult current_calibration_candidate_{};
   CurrentCalibrationAccumulator current_calibration_accumulator_{};

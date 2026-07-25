@@ -2,10 +2,143 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 
 #include "core/Types.hpp"
 
 namespace mm::characterization {
+
+class BreakawayTrialAccumulator {
+ public:
+  void reset() {
+    count_ = 0U;
+    maximum_duty_ = 0.0F;
+  }
+
+  bool add(const float duty) {
+    if (!std::isfinite(duty) || duty < 0.0F ||
+        count_ == std::numeric_limits<uint8_t>::max()) {
+      return false;
+    }
+    maximum_duty_ = std::max(maximum_duty_, duty);
+    ++count_;
+    return true;
+  }
+
+  bool complete(const uint8_t required_trials) const {
+    return required_trials > 0U && count_ >= required_trials;
+  }
+
+  uint8_t count() const { return count_; }
+  float maximumDuty() const { return maximum_duty_; }
+
+ private:
+  uint8_t count_ = 0U;
+  float maximum_duty_ = 0.0F;
+};
+
+class FullDutyTrialAccumulator {
+ public:
+  void reset() {
+    count_ = 0U;
+    maximum_velocity_rad_s_ = 0.0F;
+    maximum_acceleration_rad_s2_ = 0.0F;
+    maximum_jerk_rad_s3_ = 0.0F;
+    model_gain_rad_s_per_duty_ = 0.0F;
+    model_time_constant_s_ = 0.0F;
+  }
+
+  bool add(const float peak_velocity_rad_s,
+           const float acceleration_rad_s2, const float jerk_rad_s3,
+           const float model_gain_rad_s_per_duty,
+           const float model_time_constant_s) {
+    if (!std::isfinite(peak_velocity_rad_s) ||
+        !std::isfinite(acceleration_rad_s2) ||
+        !std::isfinite(jerk_rad_s3) ||
+        !std::isfinite(model_gain_rad_s_per_duty) ||
+        !std::isfinite(model_time_constant_s) ||
+        peak_velocity_rad_s <= 0.0F || acceleration_rad_s2 < 0.0F ||
+        jerk_rad_s3 < 0.0F || model_gain_rad_s_per_duty <= 0.0F ||
+        model_time_constant_s <= 0.0F ||
+        count_ == std::numeric_limits<uint8_t>::max()) {
+      return false;
+    }
+    if (count_ == 0U ||
+        peak_velocity_rad_s > maximum_velocity_rad_s_) {
+      maximum_velocity_rad_s_ = peak_velocity_rad_s;
+      model_gain_rad_s_per_duty_ = model_gain_rad_s_per_duty;
+      model_time_constant_s_ = model_time_constant_s;
+    }
+    maximum_acceleration_rad_s2_ = std::max(
+        maximum_acceleration_rad_s2_, acceleration_rad_s2);
+    maximum_jerk_rad_s3_ =
+        std::max(maximum_jerk_rad_s3_, jerk_rad_s3);
+    ++count_;
+    return true;
+  }
+
+  bool complete(const uint8_t required_trials) const {
+    return required_trials > 0U && count_ >= required_trials;
+  }
+
+  uint8_t count() const { return count_; }
+  float maximumVelocityRadS() const {
+    return maximum_velocity_rad_s_;
+  }
+  float maximumAccelerationRadS2() const {
+    return maximum_acceleration_rad_s2_;
+  }
+  float maximumJerkRadS3() const { return maximum_jerk_rad_s3_; }
+  float modelGainRadSPerDuty() const {
+    return model_gain_rad_s_per_duty_;
+  }
+  float modelTimeConstantS() const {
+    return model_time_constant_s_;
+  }
+
+ private:
+  uint8_t count_ = 0U;
+  float maximum_velocity_rad_s_ = 0.0F;
+  float maximum_acceleration_rad_s2_ = 0.0F;
+  float maximum_jerk_rad_s3_ = 0.0F;
+  float model_gain_rad_s_per_duty_ = 0.0F;
+  float model_time_constant_s_ = 0.0F;
+};
+
+inline bool breakawayVelocityMatchesDirection(
+    const float velocity_rad_s, const int8_t commanded_direction,
+    const float motion_threshold_rad_s) {
+  const int8_t normalized_direction = commanded_direction >= 0 ? 1 : -1;
+  return velocity_rad_s * static_cast<float>(normalized_direction) >=
+      motion_threshold_rad_s;
+}
+
+inline uint64_t breakawayDirectedTravelTicks(
+    const int64_t start_count, const int64_t current_count,
+    const int8_t commanded_direction, const int8_t encoder_direction) {
+  const int8_t expected_raw_direction =
+      (commanded_direction >= 0 ? 1 : -1) *
+      (encoder_direction >= 0 ? 1 : -1);
+  if ((expected_raw_direction > 0 && current_count < start_count) ||
+      (expected_raw_direction < 0 && current_count > start_count)) {
+    return 0U;
+  }
+  return current_count >= start_count
+      ? static_cast<uint64_t>(current_count) -
+            static_cast<uint64_t>(start_count)
+      : static_cast<uint64_t>(start_count) -
+            static_cast<uint64_t>(current_count);
+}
+
+inline bool breakawayTravelComplete(
+    const int64_t start_count, const int64_t current_count,
+    const int8_t commanded_direction, const EncoderConfiguration& encoder) {
+  return encoder.counts_per_output_revolution > 0U &&
+      breakawayDirectedTravelTicks(
+          start_count, current_count, commanded_direction,
+          encoder.direction) >= encoder.counts_per_output_revolution;
+}
 
 inline float recommendedAccelerationRadS2(
     const CharacterizationDynamicsResult& measured, const float safety_factor) {
