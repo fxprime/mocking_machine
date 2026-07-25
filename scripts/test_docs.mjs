@@ -57,7 +57,8 @@ const payloadMessages = new Map([
   ["ParameterPayload", "SET_PARAMETER"],
   ["ProfilePayload", "PROFILE_CONFIGURATION"],
   ["SetProfilePayload", "SET_PROFILE"],
-  ["LoadConfigurationPayload", "LOAD_CONFIGURATION"]
+  ["LoadConfigurationPayload", "LOAD_CONFIGURATION"],
+  ["BearingConfigurationPayload", "BEARING_CONFIGURATION"]
 ]);
 for (const match of application.matchAll(/static_assert\(sizeof\((\w+)\) == (\d+)U/g)) {
   const message = payloadMessages.get(match[1]);

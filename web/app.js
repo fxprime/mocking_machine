@@ -18,7 +18,7 @@ import { createVelocityStepSequence, encodeVelocityStepSequence } from "./veloci
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, GET_BEARING_CONFIGURATION: 0x0133, BEARING_CONFIGURATION: 0x0134, SET_BEARING_CONFIGURATION: 0x0135, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const ROTOR_ZERO_CALIBRATION_ACTION = { CAPTURE: 0, SAVE: 1, CANCEL: 2, REQUEST_STATUS: 3 };
 const MAX_PROFILES = 8;
@@ -95,9 +95,13 @@ let loadConfiguration = [];
 let loadConfigurationSaved = [];
 let editingLoadSlot;
 let loadSavePending = false;
+let brokenBearing = false;
+let brokenBearingSaved = false;
+let bearingSavePending = false;
 let renderedMachineStatusKey;
 let recordedLoadConfiguration = [];
 let recordedLoadSettingId = 0;
+let recordedBrokenBearing = false;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const $ = id => document.getElementById(id);
@@ -290,6 +294,11 @@ function handleMessage(id, data) {
     } catch (error) {
       toast(`Firmware load configuration is invalid: ${error.message}`);
     }
+  } else if (id === MSG.BEARING_CONFIGURATION) {
+    const incoming = data.getUint8(1) !== 0;
+    brokenBearingSaved = incoming;
+    if (!bearingSavePending) brokenBearing = incoming;
+    renderBearingCondition();
   } else if (id === MSG.TELEMETRY) {
     deviceSynchronizer.markTelemetryReceived();
     const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
@@ -342,6 +351,7 @@ function handleMessage(id, data) {
       runRecorder.begin();
       recordedLoadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
       recordedLoadSettingId = Number(settings.loadSetting) || 0;
+      recordedBrokenBearing = brokenBearingSaved;
       updateExportButton();
     }
     if (request === MSG.ARM && overviewRunAction?.stage === "arm") {
@@ -405,6 +415,18 @@ function handleMessage(id, data) {
         toast(`Load change was rejected and rolled back: ${resultDescription(result)}.`);
       }
       renderRotorLoadSetup();
+      return;
+    }
+    if (request === MSG.SET_BEARING_CONFIGURATION && bearingSavePending) {
+      bearingSavePending = false;
+      if (result === 0) {
+        brokenBearingSaved = brokenBearing;
+        toast(`Bearing condition saved as ${brokenBearing ? "broken" : "good"}.`);
+      } else {
+        brokenBearing = brokenBearingSaved;
+        toast(`Bearing condition was rejected and rolled back: ${resultDescription(result)}.`);
+      }
+      renderBearingCondition();
       return;
     }
     if (request === MSG.CURRENT_CALIBRATION) {
@@ -815,7 +837,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; recordedBrokenBearing = false; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; brokenBearing = false; brokenBearingSaved = false; bearingSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
   renderMachineStateControl();
   updateExportButton();
   renderRunProfileDialog();
@@ -980,8 +1002,8 @@ function updateExportFileSummary() {
   const files = [`${baseName}.csv`];
   if (recordedLoadConfiguration.length) files.push(`${baseName}-loads.csv`);
   $("exportFileSummary").textContent = recordedLoadConfiguration.length
-    ? `Two files will be downloaded: ${files.join(" and ")}. Your browser may ask to allow multiple downloads.`
-    : `One file will be downloaded: ${files[0]}. No saved rotor loads were active for this run.`;
+    ? `Two files will be downloaded: ${files.join(" and ")}. The run CSV includes bearing condition; the load CSV contains load details only. Your browser may ask to allow multiple downloads.`
+    : `One file will be downloaded: ${files[0]}. It includes the recorded bearing condition; no saved rotor loads were active for this run.`;
 }
 
 function downloadCsv(fileName, contents) {
@@ -1588,7 +1610,8 @@ function decodeProfile(data) {
 const loadColors = ["#4ec3e0", "#f0b84a", "#58d69d", "#b58cff", "#ff7a90", "#77a6ff", "#e88de7", "#a9d45b", "#ff9d57", "#45d4c5", "#d8c65a", "#9e93ff"];
 
 function renderRotorLoadSetup() {
-  const loadEditingEnabled = connected && latestState === 0 && !loadSavePending;
+  const loadEditingEnabled = connected && latestState === 0 &&
+      !loadSavePending && !bearingSavePending;
   const bySlot = new Map(loadConfiguration.map(load => [load.slot, load]));
   const slots = Array.from({ length: ROTOR_SLOT_COUNT }, (_, slot) => {
     const point = slotPosition(slot);
@@ -1627,12 +1650,61 @@ function renderRotorLoadSetup() {
   $("loadSlotList").innerHTML = loadConfiguration.length
     ? loadConfiguration.map(load => `<span class="load-slot-chip" style="color:${loadColors[load.slot]}"><i></i>${load.position}° · strength ${load.strength}</span>`).join("")
     : '<p class="hint">No load positions configured.</p>';
+  renderBearingCondition();
+}
+
+function renderBearingCondition() {
+  const control = $("bearingConditionControl");
+  const editingEnabled = connected && latestState === 0 &&
+      !loadSavePending && !bearingSavePending;
+  control.disabled = !editingEnabled;
+  control.classList.toggle("good", !brokenBearing);
+  control.classList.toggle("broken", brokenBearing);
+  control.setAttribute("aria-pressed", String(brokenBearing));
+  control.setAttribute(
+      "aria-label",
+      bearingSavePending
+        ? `Saving ${brokenBearing ? "broken" : "good"} bearing condition`
+        : `${brokenBearing ? "Broken" : "Good"} bearing. Activate to mark it as ${brokenBearing ? "good" : "broken"}`);
+  $("bearingConditionLabel").textContent = brokenBearing ? "Broken bearing" : "Good bearing";
+  $("bearingConditionHint").textContent = bearingSavePending
+    ? "Saving…"
+    : editingEnabled
+      ? `Activate to mark ${brokenBearing ? "good" : "broken"}`
+      : connected && latestState !== 0
+        ? "Disarm to change"
+        : "Connect to change";
+}
+
+async function toggleBearingCondition() {
+  if (!connected) return toast("Connect to the firmware before changing bearing condition.");
+  if (latestState !== 0) return toast("Disarm the machine before changing bearing condition.");
+  if (loadSavePending || bearingSavePending) {
+    return toast("Wait for the current setup change to finish saving.");
+  }
+  brokenBearing = !brokenBearing;
+  bearingSavePending = true;
+  renderBearingCondition();
+  const payload = new Uint8Array([
+    ((Number(settings.loadSetting) || 0) + 1) & 0xff,
+    brokenBearing ? 1 : 0
+  ]);
+  try {
+    await sendFrame(MSG.SET_BEARING_CONFIGURATION, payload);
+  } catch (error) {
+    bearingSavePending = false;
+    brokenBearing = brokenBearingSaved;
+    renderBearingCondition();
+    toast(`Could not save bearing condition: ${error.message}`);
+  }
 }
 
 function openLoadSlotEditor(slot) {
   if (!connected) return toast("Connect to the firmware before changing the load setup.");
   if (latestState !== 0) return toast("Disarm the machine before changing the load setup.");
-  if (loadSavePending) return toast("Wait for the current load change to finish saving.");
+  if (loadSavePending || bearingSavePending) {
+    return toast("Wait for the current setup change to finish saving.");
+  }
   editingLoadSlot = slot;
   const existing = loadConfiguration.find(load => load.slot === slot);
   $("loadSlotPosition").textContent = slot * 30;
@@ -1656,7 +1728,7 @@ function encodeLoadConfiguration() {
 }
 
 async function persistLoadConfiguration() {
-  if (!connected || !writer || latestState !== 0 || loadSavePending) {
+  if (!connected || !writer || latestState !== 0 || loadSavePending || bearingSavePending) {
     loadConfiguration = loadConfigurationSaved.map(load => ({ ...load }));
     renderRotorLoadSetup();
     return;
@@ -2754,6 +2826,7 @@ $("stopMotorTest").addEventListener("click", () => stopMotorTest(true));
 $("terminalForm").addEventListener("submit", async event => { event.preventDefault(); const input = $("terminalInput"); if (input.value.trim()) { appendTerminal(`> ${input.value}\n`); await sendAscii(input.value.trim()); input.value = ""; } });
 $("clearTerminal").addEventListener("click", () => { textRx = ""; $("terminalOutput").textContent = ""; });
 $("serialLinkBadge").addEventListener("click", () => $("serialLinkDialog").showModal());
+$("bearingConditionControl").addEventListener("click", toggleBearingCondition);
 $("exportButton").addEventListener("click", () => {
   if (!runRecorder.samples.length) return;
   $("exportBaseName").value = defaultExportBaseName();
@@ -2767,15 +2840,15 @@ $("exportForm").addEventListener("submit", event => {
   if (event.submitter?.value !== "export") return;
   event.preventDefault();
   const baseName = exportBaseName();
-  downloadCsv(`${baseName}.csv`, createTelemetryCsv(runRecorder.samples));
+  downloadCsv(`${baseName}.csv`, createTelemetryCsv(runRecorder.samples, recordedBrokenBearing));
   if (recordedLoadConfiguration.length) {
     downloadCsv(`${baseName}-loads.csv`,
       createLoadConfigurationCsv(recordedLoadSettingId, recordedLoadConfiguration));
   }
   $("exportDialog").close("export");
   toast(recordedLoadConfiguration.length
-    ? "Run data and rotor load information exported."
-    : "Run data exported.");
+    ? "Run data, bearing condition, and rotor load information exported."
+    : "Run data and bearing condition exported.");
 });
 window.addEventListener("beforeunload", () => { clearInterval(motorTestTimer); clearInterval(currentCalibrationDriveTimer); if (connected) sendFrame(MSG.STOP_RUN); });
 setMotorTestDuty(0.10);

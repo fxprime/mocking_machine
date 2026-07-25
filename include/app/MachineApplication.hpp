@@ -51,6 +51,7 @@ class MachineApplication final {
   void sendSettings(uint16_t sequence);
   void sendProfiles(uint16_t sequence);
   bool sendLoadConfiguration(uint16_t sequence);
+  bool sendBearingConfiguration(uint16_t sequence);
   bool sendProfile(const VelocityProfileConfiguration& profile, uint16_t sequence);
   void sendTelemetry();
   bool sendCharacterizationResult(uint16_t sequence);

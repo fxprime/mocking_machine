@@ -221,6 +221,11 @@ struct LoadConfigurationPayload {
   LoadEntryPayload loads[kMaximumLoads];
 };
 
+struct BearingConfigurationPayload {
+  uint8_t setting_id;
+  uint8_t broken_bearing;
+};
+
 struct MotorTestPayload {
   float signed_raw_duty;
 };
@@ -332,6 +337,8 @@ static_assert(sizeof(VelocitySequencePayload) == 72U,
 static_assert(sizeof(LoadEntryPayload) == 7U, "Load entry payload layout changed");
 static_assert(sizeof(LoadConfigurationPayload) == 86U,
               "Load configuration payload layout changed");
+static_assert(sizeof(BearingConfigurationPayload) == 2U,
+              "Bearing configuration payload layout changed");
 
 VelocityProfileConfiguration decodeProfile(const ProfilePayload& payload) {
   VelocityProfileConfiguration profile{};
@@ -862,10 +869,14 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::GetLoadConfiguration:
       sendLoadConfiguration(frame.sequence);
       return;
+    case MessageId::GetBearingConfiguration:
+      sendBearingConfiguration(frame.sequence);
+      return;
     case MessageId::StartStream:
       sendSettings(frame.sequence);
       sendProfiles(frame.sequence);
       sendLoadConfiguration(frame.sequence);
+      sendBearingConfiguration(frame.sequence);
       if (characterization_result_pending_) {
         sendCharacterizationResult(frame.sequence);
       }
@@ -954,6 +965,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       MachineLoadSetting candidate{};
       candidate.setting_id = requested.setting_id;
       candidate.count = requested.count;
+      candidate.broken_bearing = settings_.load_setting.broken_bearing;
       for (uint8_t index = 0; valid && index < requested.count; ++index) {
         const auto& entry = requested.loads[index];
         valid = entry.slot_id < kRotorSlotCount &&
@@ -982,6 +994,39 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
       sendSettings(frame.sequence);
       sendLoadConfiguration(frame.sequence);
+      sendBearingConfiguration(frame.sequence);
+      return;
+    }
+    case MessageId::SetBearingConfiguration: {
+      if (frame.payload_size != sizeof(BearingConfigurationPayload) ||
+          state_ != RunState::Disarmed) {
+        sendAck(frame.sequence, frame.message_id,
+                frame.payload_size != sizeof(BearingConfigurationPayload)
+                    ? ResultCode::InvalidLength
+                    : ResultCode::UnsafeState);
+        return;
+      }
+      BearingConfigurationPayload requested{};
+      std::memcpy(&requested, frame.payload, sizeof(requested));
+      if (requested.broken_bearing > 1U) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      const MachineLoadSetting previous = settings_.load_setting;
+      settings_.load_setting.setting_id = requested.setting_id;
+      settings_.load_setting.broken_bearing = requested.broken_bearing;
+      MachineSettings persisted = SettingsStore::defaults();
+      settings_store_.load(persisted);
+      persisted.load_setting = settings_.load_setting;
+      if (!SettingsStore::validate(persisted) || !settings_store_.save(persisted)) {
+        settings_.load_setting = previous;
+        sendAck(frame.sequence, frame.message_id, ResultCode::StorageFailure);
+        return;
+      }
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      sendSettings(frame.sequence);
+      sendLoadConfiguration(frame.sequence);
+      sendBearingConfiguration(frame.sequence);
       return;
     }
     case MessageId::SetController: {
@@ -1831,6 +1876,15 @@ bool MachineApplication::sendLoadConfiguration(const uint16_t sequence) {
     payload.loads[index] = {source.load_id, source.position_deg, source.strength};
   }
   return serial_link_.send(protocol::MessageId::LoadConfiguration, sequence, &payload,
+                           sizeof(payload));
+}
+
+bool MachineApplication::sendBearingConfiguration(const uint16_t sequence) {
+  const BearingConfigurationPayload payload{
+      settings_.load_setting.setting_id,
+      static_cast<uint8_t>(settings_.load_setting.broken_bearing),
+  };
+  return serial_link_.send(protocol::MessageId::BearingConfiguration, sequence, &payload,
                            sizeof(payload));
 }
 

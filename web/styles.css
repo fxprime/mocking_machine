@@ -113,6 +113,22 @@ main { max-width: 1480px; margin: auto; padding: 0 2rem 3rem; }
 .rotor-slot .slot-badge { fill: var(--surface-raised); stroke: currentColor; stroke-width: 2; }
 .rotor-slot text { fill: currentColor; font: 700 14px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .rotor-slot .strength-arrow { stroke: currentColor; stroke-width: 5; stroke-linecap: round; marker-end: url(#loadArrow); }
+.bearing-condition-control { display: flex; align-items: center; gap: .8rem; width: 100%; margin-bottom: 1rem; text-align: left; background: var(--surface-raised); }
+.bearing-condition-control:disabled { opacity: .7; }
+.bearing-condition-control > span { min-width: 0; }
+.bearing-condition-control strong, .bearing-condition-control small { display: block; }
+.bearing-condition-control small { margin-top: .1rem; color: var(--on-muted); font-weight: 400; }
+.bearing-condition-icon { flex: 0 0 72px; width: 72px; height: 72px; }
+.bearing-outer, .bearing-inner { fill: none; stroke: var(--success); stroke-width: 7; }
+.bearing-balls circle { fill: var(--success); }
+.bearing-crack, .bearing-damage { display: none; fill: none; stroke: var(--danger); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+.bearing-condition-control.broken { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); }
+.bearing-condition-control.broken .bearing-outer, .bearing-condition-control.broken .bearing-inner { stroke: var(--danger); }
+.bearing-condition-control.broken .bearing-balls circle { fill: var(--danger); }
+.bearing-condition-control.broken .bearing-balls circle:nth-child(4) { transform: translate(7px, 5px); }
+.bearing-condition-control.broken .bearing-crack, .bearing-condition-control.broken .bearing-damage { display: block; }
+.bearing-condition-control.broken strong { color: var(--danger); }
+.bearing-condition-control.good strong { color: var(--success); }
 .rotor-load-summary h3 { margin: 0 0 .75rem; font-size: 1rem; }
 .load-slot-list { min-height: 7rem; display: flex; flex-wrap: wrap; align-content: flex-start; gap: .5rem; margin-bottom: 1rem; }
 .load-slot-chip { display: inline-flex; align-items: center; gap: .45rem; padding: .4rem .65rem; border: 1px solid currentColor; border-radius: 999px; background: var(--surface-soft); }

@@ -85,15 +85,32 @@
         </div>
         <article class="panel rotor-load-panel">
           <div class="panel-heading">
-            <div><h2>Rotor load setup</h2><p>Click a 30° slot to label the installed imbalance strength. The drawing records the physical setup; it does not move the load.</p></div>
+            <div><h2>Rotor setup</h2><p>Mark the bearing condition and click a 30° slot to label installed imbalance strength. These controls record the physical setup; they do not move the rotor.</p></div>
             <span id="loadSetupStatus" class="status-badge offline">0 active slots</span>
           </div>
           <div class="rotor-load-layout">
             <svg id="rotorLoadDiagram" class="rotor-load-diagram" viewBox="0 0 420 420" role="group" aria-label="Twelve rotor load positions"></svg>
             <div class="rotor-load-summary">
+              <button id="bearingConditionControl" class="bearing-condition-control good" type="button"
+                      aria-pressed="false" aria-label="Good bearing. Activate to mark it as broken" disabled>
+                <svg class="bearing-condition-icon" viewBox="0 0 120 120" aria-hidden="true">
+                  <circle class="bearing-outer" cx="60" cy="60" r="48"/>
+                  <circle class="bearing-inner" cx="60" cy="60" r="23"/>
+                  <g class="bearing-balls">
+                    <circle cx="60" cy="25" r="7"/><circle cx="85" cy="35" r="7"/>
+                    <circle cx="95" cy="60" r="7"/><circle cx="85" cy="85" r="7"/>
+                    <circle cx="60" cy="95" r="7"/><circle cx="35" cy="85" r="7"/>
+                    <circle cx="25" cy="60" r="7"/><circle cx="35" cy="35" r="7"/>
+                  </g>
+                  <path class="bearing-crack" d="M87 13 76 31 88 39 73 55 86 64"/>
+                  <path class="bearing-damage" d="M82 80 91 75 98 84 92 96"/>
+                </svg>
+                <span><strong id="bearingConditionLabel">Good bearing</strong>
+                  <small id="bearingConditionHint">Activate to mark broken</small></span>
+              </button>
               <h3>Installed loads</h3>
               <div id="loadSlotList" class="load-slot-list"><p class="hint">No load positions configured.</p></div>
-              <p class="hint">Changes are saved automatically while connected and disarmed. Strength is a label from 1–10 for the attached weight or load severity.</p>
+              <p class="hint">Bearing and load changes are saved automatically while connected and disarmed. Strength is a label from 1–10 for the attached weight or load severity.</p>
             </div>
           </div>
         </article>

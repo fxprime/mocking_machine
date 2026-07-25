@@ -593,7 +593,9 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       (settings.encoder.direction != -1 && settings.encoder.direction != 1) ||
       (settings.motor_direction != -1 && settings.motor_direction != 1) ||
       settings.profile_count == 0U || settings.profile_count > kMaximumProfiles ||
-      settings.load_setting.count > kMaximumLoads || settings.serial.stream_rate_hz == 0U ||
+      settings.load_setting.count > kMaximumLoads ||
+      settings.load_setting.broken_bearing > 1U ||
+      settings.serial.stream_rate_hz == 0U ||
       settings.serial.stream_rate_hz > 500U || settings.serial.baud < 9600U ||
       settings.serial.baud > 921600U ||
       static_cast<uint8_t>(settings.velocity_estimator_method) >
@@ -802,11 +804,14 @@ bool SettingsStore::load(MachineSettings& settings) {
       loaded = validate(settings);
     } else if (valid_blob &&
                (blob.schema_version == 17U || blob.schema_version == 18U ||
-                blob.schema_version == 19U) &&
+                blob.schema_version == 19U || blob.schema_version == 20U) &&
                blob.payload.schema_version == blob.schema_version) {
       settings = blob.payload;
       settings.schema_version = MachineSettings::kSchemaVersion;
-      settings.encoder.zero_position_offset_ticks = 0;
+      if (blob.schema_version < 20U) {
+        settings.encoder.zero_position_offset_ticks = 0;
+      }
+      settings.load_setting.broken_bearing = false;
       loaded = validate(settings);
       migrated = loaded;
     }
@@ -1166,6 +1171,9 @@ bool SettingsStore::load(MachineSettings& settings) {
     return false;
   }
   if (migrated) {
+    // Schemas 4–20 used this byte as structure padding, so never interpret its
+    // stored value as a bearing label during migration.
+    settings.load_setting.broken_bearing = false;
     save(settings);
   }
   return true;

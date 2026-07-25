@@ -149,14 +149,16 @@ assert.match(appSource, /communicationMetrics\.recordTelemetry\(sample\.timestam
   "Dropout estimation must use device timestamps and the configured telemetry rate");
 assert.match(appSource, /SET_DEFAULT_PROFILE:\s*0x0125/);
 assert.match(appSource, /SET_LOAD_CONFIGURATION:\s*0x0132/);
+assert.match(appSource, /SET_BEARING_CONFIGURATION:\s*0x0135/,
+  "Bearing condition must use its own binary protocol message");
 assert.match(appSource, /runtimeProfileId = action\.profileId/,
   "Temporary selection must update runtime state without overwriting the saved default");
 assert.match(appSource, /shouldRefreshMachineUi\(renderedMachineStatusKey, state, faults\)/,
   "Stable telemetry must not rebuild the interactive rotor diagram");
 assert.match(appSource, /runRecorder\.consume\(sample\)/,
   "Telemetry must pass through the run-session recorder");
-assert.match(appSource, /createTelemetryCsv\(runRecorder\.samples\)/,
-  "CSV export must use only the latest explicitly started run");
+assert.match(appSource, /createTelemetryCsv\(runRecorder\.samples,\s*recordedBrokenBearing\)/,
+  "CSV export must use only the latest run and its snapshotted bearing condition");
 assert.match(appSource, /readBaudPreference\(localPreferenceStorage\(\)\)/,
   "The connection selector must restore the last valid browser-local baud rate");
 assert.match(appSource, /writeBaudPreference\(localPreferenceStorage\(\), \$\("baud"\)\.value\)/,
@@ -165,6 +167,10 @@ assert.match(indexSource, /id="exportDialog"/);
 assert.match(indexSource, /id="exportBaseName"/);
 assert.match(appSource, /createLoadConfigurationCsv\(recordedLoadSettingId, recordedLoadConfiguration\)/,
   "A recorded run with loads must export a separate load-information CSV");
+assert.match(indexSource, /id="bearingConditionControl"[\s\S]*class="bearing-condition-icon"/,
+  "Rotor setup must expose the good/broken bearing SVG control");
+assert.match(appSource, /toggleBearingCondition[\s\S]*SET_BEARING_CONFIGURATION/,
+  "Changing bearing condition must persist immediately");
 assert.doesNotMatch(indexSource, /id="saveLoadSetup"/,
   "Load editing must not require a separate save button");
 assert.match(appSource, /applyLoadSlot[\s\S]*persistLoadConfiguration\(\)/,

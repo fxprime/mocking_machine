@@ -30,13 +30,15 @@ const columns = [
   ["zero_index_rejected_count", sample => integer(sample.zeroRejected)],
   ["load_setting_id", sample => integer(sample.load)],
   ["state", sample => integer(sample.state)],
-  ["faults", sample => integer(sample.faults)]
+  ["faults", sample => integer(sample.faults)],
+  ["bearing_condition", (sample, context) => context.brokenBearing ? "broken" : "good"]
 ];
 
-export function createTelemetryCsv(samples) {
+export function createTelemetryCsv(samples, brokenBearing = false) {
+  const context = { brokenBearing: Boolean(brokenBearing) };
   const rows = [columns.map(([name]) => name).join(",")];
   for (const sample of samples) {
-    rows.push(columns.map(([, format]) => format(sample)).join(","));
+    rows.push(columns.map(([, format]) => format(sample, context)).join(","));
   }
   return rows.join("\n");
 }

@@ -103,6 +103,9 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0130` | [GET_LOAD_CONFIGURATION](#load-configuration-messages-0x0130-0x0132) | Host → device | 0 | Request the load label |
 | `0x0131` | [LOAD_CONFIGURATION](#load_configuration-0x0131) | Device → host | 86 | Current load label |
 | `0x0132` | [SET_LOAD_CONFIGURATION](#load-configuration-messages-0x0130-0x0132) | Host → device | 86 | Validate and persist a load label |
+| `0x0133` | [GET_BEARING_CONFIGURATION](#bearing-configuration-messages-0x0133-0x0135) | Host → device | 0 | Request the bearing-condition label |
+| `0x0134` | [BEARING_CONFIGURATION](#bearing-configuration-messages-0x0133-0x0135) | Device → host | 2 | Current bearing-condition label |
+| `0x0135` | [SET_BEARING_CONFIGURATION](#bearing-configuration-messages-0x0133-0x0135) | Host → device | 2 | Validate and persist bearing condition |
 
 ### Runtime and telemetry
 
@@ -318,6 +321,20 @@ Both commands are accepted only while disarmed. `SET_PROFILE` requires an existi
 
 Slots must be unique. `SET_LOAD_CONFIGURATION` persists the complete configuration and is accepted only while disarmed.
 
+### Bearing configuration messages (0x0133-0x0135)
+
+`GET_BEARING_CONFIGURATION` has an empty payload. `BEARING_CONFIGURATION` and
+`SET_BEARING_CONFIGURATION` share this bounded payload:
+
+| Offset | Field name | Type | Values | Description |
+|---:|---|---|---|---|
+| 0 | `setting_id` | `u8` | — | Shared rotor-setup label ID |
+| 1 | `broken_bearing` | `u8` | `0`, `1` | `0` good bearing, `1` intentionally broken bearing |
+
+`SET_BEARING_CONFIGURATION` is accepted only while disarmed. Saving either bearing
+condition or rotor loads advances the shared `setting_id`, and neither operation changes
+the other part of the setup.
+
 ### Runtime control messages (0x0200-0x0206)
 
 - `ARM` performs all safety checks. Hosts must wait for a successful ACK before starting motion.
@@ -368,7 +385,7 @@ normal frame CRC.
 
 ### Stream control messages (0x0210, 0x0211)
 
-Both have empty payloads. `START_STREAM` first emits `SETTINGS`, every stored `PROFILE_CONFIGURATION`, `LOAD_CONFIGURATION`, any pending `CHARACTERIZATION_RESULT`, applicable `CHARACTERIZATION_STATUS`, and then `ACK`; periodic telemetry follows. It does not arm or rotate the motor. `STOP_STREAM` disables periodic telemetry.
+Both have empty payloads. `START_STREAM` first emits `SETTINGS`, every stored `PROFILE_CONFIGURATION`, `LOAD_CONFIGURATION`, `BEARING_CONFIGURATION`, any pending `CHARACTERIZATION_RESULT`, applicable `CHARACTERIZATION_STATUS`, and then `ACK`; periodic telemetry follows. It does not arm or rotate the motor. `STOP_STREAM` disables periodic telemetry.
 
 ### TELEMETRY (0x0220)
 
@@ -689,7 +706,7 @@ Structured settings, telemetry, profiles, calibration status, and most actuator 
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 20.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 21.
 
 | Settings schema | Change |
 |---:|---|
@@ -703,8 +720,9 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 18 | Made rotor zero sensor-index-relative so fractional correction cannot move it |
 | 19 | Moved rotor zero into the count-domain index-correction target and removed averaging |
 | 20 | Persisted rotor zero as an integer wrapped encoder-tick offset; degrees are output-only |
+| 21 | Added a persistent good/broken bearing condition to the shared rotor setup |
 
-The current loader explicitly migrates valid schema 4–19 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-20 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–20 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schema 20 defaults the new bearing condition to good. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-21 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.

@@ -155,6 +155,7 @@ constexpr size_t kMaximumLoads = kRotorSlotCount;
 struct MachineLoadSetting {
   uint8_t setting_id = 0;
   uint8_t count = 0;
+  uint8_t broken_bearing = 0;
   std::array<LoadEntry, kMaximumLoads> loads{};
 };
 
@@ -179,7 +180,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 20;
+  static constexpr uint32_t kSchemaVersion = 21;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};
