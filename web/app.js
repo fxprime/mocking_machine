@@ -128,6 +128,43 @@ function localPreferenceStorage() {
   try { return globalThis.localStorage; } catch { return undefined; }
 }
 
+async function initializeDesktopIntegration() {
+  const desktop = globalThis.mockingMachineDesktop;
+  if (!desktop) return;
+  const preferences = $("desktopPreferences");
+  const checkbox = $("launchAtLogin");
+  const status = $("launchAtLoginStatus");
+  preferences.hidden = false;
+
+  const render = state => {
+    checkbox.checked = state.enabled;
+    checkbox.disabled = !state.supported;
+    status.textContent = state.supported
+      ? "Opens the console only; the motor remains disarmed."
+      : "Available after installing the packaged macOS application.";
+  };
+
+  try {
+    render(await desktop.getLaunchAtLogin());
+  } catch (error) {
+    checkbox.disabled = true;
+    status.textContent = `Could not read login setting: ${error.message}`;
+  }
+
+  checkbox.addEventListener("change", async () => {
+    const requested = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+      render(await desktop.setLaunchAtLogin(requested));
+      toast(requested ? "Launch at Login enabled." : "Launch at Login disabled.");
+    } catch (error) {
+      checkbox.checked = !requested;
+      checkbox.disabled = false;
+      toast(`Could not change Launch at Login: ${error.message}`);
+    }
+  });
+}
+
 function crc16(bytes) {
   let crc = 0xffff;
   for (const value of bytes) {
@@ -2839,6 +2876,7 @@ $("baud").value = String(readBaudPreference(localPreferenceStorage()));
 $("baud").addEventListener("change", () => {
   writeBaudPreference(localPreferenceStorage(), $("baud").value);
 });
+initializeDesktopIntegration();
 $("stopButton").addEventListener("click", () => stopAllManualOutputs(true));
 $("machineStateControl").addEventListener("click", toggleMachineOutput);
 $("runButton").addEventListener("click", () => {

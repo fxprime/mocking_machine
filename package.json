@@ -1,9 +1,55 @@
 {
   "name": "mocking-machine-console",
+  "productName": "Mocking Machine",
+  "version": "0.1.0",
+  "description": "Desktop console for the Mocking Machine rotating machinery test rig",
+  "author": "Thanabadee Bulunseechart, Modulemore Co., Ltd.",
   "private": true,
   "type": "module",
+  "main": "desktop/main.mjs",
+  "exports": {
+    "./api": "./lib/mocking-machine/index.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac",
+    "pack:mac": "electron-builder --mac --dir",
+    "test:desktop": "node scripts/test_desktop.mjs",
     "test:docs": "node scripts/test_docs.mjs",
-    "test:web": "node scripts/test_web.mjs && node scripts/test_motion_limiter.mjs && node scripts/test_step_response.mjs && node scripts/test_velocity_step_sequence.mjs && node scripts/test_csv_export.mjs && node scripts/test_parameter_csv.mjs && node scripts/test_rotor_position.mjs && node scripts/test_encoder_calibration.mjs && node scripts/test_profile_collection.mjs && node scripts/test_rotor_load.mjs && node scripts/test_run_recording.mjs && node scripts/test_baud_preference.mjs && node scripts/test_serial_bandwidth.mjs && node scripts/test_connection_sync.mjs && node scripts/test_communication_metrics.mjs"
+    "test:web": "node scripts/test_web.mjs && node scripts/test_motion_limiter.mjs && node scripts/test_step_response.mjs && node scripts/test_velocity_step_sequence.mjs && node scripts/test_csv_export.mjs && node scripts/test_parameter_csv.mjs && node scripts/test_rotor_position.mjs && node scripts/test_encoder_calibration.mjs && node scripts/test_profile_collection.mjs && node scripts/test_rotor_load.mjs && node scripts/test_run_recording.mjs && node scripts/test_baud_preference.mjs && node scripts/test_serial_bandwidth.mjs && node scripts/test_connection_sync.mjs && node scripts/test_communication_metrics.mjs && node scripts/test_machine_api.mjs",
+    "test:api": "node scripts/test_machine_api.mjs"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.modulemore.mockingmachine",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "lib/mocking-machine/**/*",
+      "web/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "icon": "icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "dmg": {
+      "sign": false
+    },
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
   }
 }

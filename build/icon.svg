@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="120" y1="80" x2="904" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102d63"/>
+      <stop offset="0.55" stop-color="#07172f"/>
+      <stop offset="1" stop-color="#020817"/>
+    </linearGradient>
+    <linearGradient id="rotor" x1="288" y1="248" x2="736" y2="776" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#70d9ee"/>
+      <stop offset="1" stop-color="#1599bd"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="28" stdDeviation="30" flood-color="#000817" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#background)"/>
+  <rect x="49" y="49" width="926" height="926" rx="204" fill="none" stroke="#36517a" stroke-width="18"/>
+  <g filter="url(#shadow)">
+    <circle cx="512" cy="512" r="286" fill="#091f3d" stroke="url(#rotor)" stroke-width="54"/>
+    <circle cx="512" cy="512" r="178" fill="#061127" stroke="#36517a" stroke-width="28"/>
+    <circle cx="512" cy="512" r="68" fill="url(#rotor)"/>
+    <circle cx="512" cy="512" r="24" fill="#eef5ff"/>
+    <g fill="#f0b84a">
+      <circle cx="512" cy="190" r="28"/>
+      <circle cx="673" cy="233" r="28"/>
+      <circle cx="791" cy="351" r="28"/>
+      <circle cx="834" cy="512" r="28"/>
+      <circle cx="791" cy="673" r="28"/>
+      <circle cx="673" cy="791" r="28"/>
+      <circle cx="512" cy="834" r="28"/>
+      <circle cx="351" cy="791" r="28"/>
+      <circle cx="233" cy="673" r="28"/>
+      <circle cx="190" cy="512" r="28"/>
+      <circle cx="233" cy="351" r="28"/>
+      <circle cx="351" cy="233" r="28"/>
+    </g>
+    <path d="M512 512 671 286" fill="none" stroke="#ff646e" stroke-width="38" stroke-linecap="round"/>
+    <circle cx="677" cy="277" r="52" fill="#ff646e" stroke="#ffd4d7" stroke-width="12"/>
+  </g>
+</svg>

@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>Mocking Machine Console</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -475,6 +477,10 @@
       <span>Author:</span>
       <strong>Thanabadee Bulunseechart</strong>
       <span>· Modulemore Co., Ltd.</span>
+    </div>
+    <div id="desktopPreferences" class="desktop-preferences" hidden>
+      <label><input id="launchAtLogin" type="checkbox" aria-describedby="launchAtLoginStatus"> Launch at login</label>
+      <span id="launchAtLoginStatus">Desktop application setting</span>
     </div>
   </footer>
 

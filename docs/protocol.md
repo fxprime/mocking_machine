@@ -787,6 +787,11 @@ Binary packets and newline-terminated printable ASCII commands share the upload 
 
 Structured settings, telemetry, profiles, calibration status, and most actuator workflows use the binary protocol. The current browser intentionally also uses ASCII for the Overview arm button, `config save`, motor-characterization start/abort, and the free-form terminal. Those ASCII operations return text rather than sequence-correlated ACK frames.
 
+Applications do not need to implement this mixed-stream parser themselves. The
+[Mocking Machine JavaScript API](../lib/mocking-machine/README.md) provides incremental framing,
+CRC validation, payload codecs, request correlation, Web Serial support, and a generic transport
+adapter for Node.js serial libraries.
+
 ## Compatibility
 
 Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 24.

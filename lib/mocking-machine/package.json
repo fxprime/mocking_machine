@@ -1,0 +1,14 @@
+{
+  "name": "@modulemore/mocking-machine-api",
+  "version": "0.1.0",
+  "description": "Transport-neutral JavaScript client for the Mocking Machine serial protocol",
+  "type": "module",
+  "exports": "./index.mjs",
+  "files": [
+    "*.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

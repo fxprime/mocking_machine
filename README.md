@@ -85,6 +85,10 @@ GUI ไม่ต้องติดตั้ง dependency เพิ่ม ใช
 - **Calibration** — สอบเทียบ encoder, VIN, current sense และ characterize มอเตอร์
 - **Terminal** — ส่งคำสั่ง ASCII และดูข้อความ debug
 
+แอป JavaScript ภายนอกสามารถใช้ [Mocking Machine JavaScript API](lib/mocking-machine/README.md)
+เพื่อเชื่อมต่อผ่าน Web Serial, Electron หรือ Node.js ได้โดยไม่ต้องเขียน frame parser, CRC,
+payload decoder และ ACK correlation ซ้ำเอง
+
 ![หน้าจอ Overview ของ Mocking Machine](image_gui.png)
 
 ![หน้าต่างแก้ไข velocity profile](image_velocityprofile.png)
@@ -169,6 +173,27 @@ python3 -m http.server 8080 -d web
 4. ทำ calibration และ motor characterization ขณะยังไม่มีมวลไม่สมดุล
 5. ทดสอบที่ duty/velocity ต่ำก่อนติดตั้งมวลจริง
 
+## macOS desktop app
+
+GUI ชุดเดียวกันสามารถรันเป็นแอป Electron บน macOS โดยไม่ต้องเปิด Chrome หรือรัน local web server:
+
+```sh
+npm install
+npm start
+```
+
+การ build desktop app ต้องใช้ Node.js 22.12 หรือใหม่กว่า
+
+สร้างไฟล์ติดตั้ง `.dmg` และ `.zip` สำหรับสถาปัตยกรรมของ Mac ที่กำลัง build:
+
+```sh
+npm run dist:mac
+```
+
+ผลลัพธ์อยู่ใน `dist/` การแจกจ่ายให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ใน environment ของ build ตามเอกสาร electron-builder ก่อนสร้าง release
+
+แอปที่ติดตั้งแล้วมีตัวเลือก **Launch at login** ใน footer ตัวเลือกนี้เปิดเฉพาะ console และไม่เชื่อมต่อ ไม่ Arm และไม่สั่งมอเตอร์หมุนโดยอัตโนมัติ การเลือกพอร์ต ESP32 ยังคงเกิดหลังผู้ใช้กด **Connect** และการเริ่มมอเตอร์ยังผ่าน safety confirmation เดิมทั้งหมด
+
 การกด Connect จะเริ่มเฉพาะการ sync configuration และ telemetry เท่านั้น ผู้ใช้ยังต้อง Arm และยืนยันความปลอดภัยก่อนสั่งให้มอเตอร์หมุน
 
 ## ข้อมูลที่บันทึก
@@ -190,6 +215,7 @@ CSV รุ่นปัจจุบันยังไม่ได้ฝัง fir
 |---|---|
 | `src/`, `include/` | เฟิร์มแวร์ ESP32 Arduino แยกเป็น app, control, driver, profile, protocol และ storage |
 | `web/` | Web Serial GUI แบบ dependency-free |
+| `lib/mocking-machine/` | JavaScript protocol/client API และ serial transport adapters |
 | `test/` | Native deterministic tests สำหรับ control, protocol และ calibration |
 | `scripts/` | Build metadata และ Web GUI tests |
 | `docs/` | เอกสาร wiring, architecture, protocol และการประเมิน step response |

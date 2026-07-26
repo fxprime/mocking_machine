@@ -60,6 +60,11 @@ main { max-width: 1480px; margin: auto; padding: 0 2rem 3rem; }
 .company-logo-frame img { display: block; width: 100%; height: auto; }
 .product-credit { display: flex; align-items: baseline; flex-wrap: wrap; gap: .25rem; line-height: 1.25; }
 .product-credit strong { color: var(--on-surface); font-weight: 500; }
+.desktop-preferences { margin-left: auto; display: flex; align-items: center; gap: .55rem; }
+.desktop-preferences[hidden] { display: none; }
+.desktop-preferences label { display: flex; align-items: center; gap: .35rem; color: var(--on-surface); }
+.desktop-preferences input { min-height: 0; }
+.desktop-preferences span { max-width: 22rem; }
 .tab-strip { display: flex; align-items: center; gap: .8rem; overflow-x: auto; border-bottom: 1px solid var(--outline); }
 .tabs { display: flex; flex: 1 0 auto; gap: .25rem; padding: 1rem 0; }
 .tab { background: transparent; border-color: transparent; color: var(--on-muted); white-space: nowrap; }
@@ -227,4 +232,4 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 @media (max-width: 1120px) { .overview-status-layout { grid-template-columns: 1fr; } .overview-status-layout .rotor-load-panel { width: min(100%, 720px); } }
 @media (max-width: 900px) { .topbar { align-items: flex-start; flex-direction: column; } .metric-grid { grid-template-columns: repeat(2, 1fr); } .two-column { grid-template-columns: 1fr; } .constraint-strip { grid-template-columns: repeat(2, 1fr); } .point-editor { grid-template-columns: 1fr 1fr; } .estimator-controls { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 620px) { .rotor-load-layout { grid-template-columns: 1fr; } }
-@media (max-width: 560px) { main, .topbar, .product-footer { padding-left: 1rem; padding-right: 1rem; } .metric-grid, .form-grid, .pwm-control, .result-grid, .profile-form-grid, .constraint-strip, .point-editor, .calibration-point-grid, .run-profile-selection { grid-template-columns: 1fr; } .connection-controls { align-items: stretch; } .action-row, .fault-banner.with-action, .profile-actions, .calibration-actions, .sequence-preview { align-items: stretch; flex-direction: column; } .profile-actions .danger, .calibration-actions .primary { margin-left: 0; } }
+@media (max-width: 560px) { main, .topbar, .product-footer { padding-left: 1rem; padding-right: 1rem; } .metric-grid, .form-grid, .pwm-control, .result-grid, .profile-form-grid, .constraint-strip, .point-editor, .calibration-point-grid, .run-profile-selection { grid-template-columns: 1fr; } .connection-controls { align-items: stretch; } .action-row, .fault-banner.with-action, .profile-actions, .calibration-actions, .sequence-preview { align-items: stretch; flex-direction: column; } .profile-actions .danger, .calibration-actions .primary { margin-left: 0; } .product-footer { flex-wrap: wrap; } .desktop-preferences { width: 100%; margin-left: 0; } }
