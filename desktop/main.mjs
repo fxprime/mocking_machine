@@ -1,6 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } from "electron";
+import electronMain from "electron/main";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  DEFAULT_API_CONFIGURATION,
+  DesktopApiServer,
+  normalizeApiConfiguration
+} from "./api-server.mjs";
 import { getLaunchAtLoginState, setLaunchAtLoginState } from "./login-item.mjs";
 import {
   selectableSerialPorts,
@@ -9,11 +16,69 @@ import {
 } from "./serial-port.mjs";
 import { performWindowAction, windowChromeState } from "./window-chrome.mjs";
 
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = electronMain;
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const consolePath = path.join(desktopDirectory, "..", "web", "index.html");
 const consoleUrl = pathToFileURL(consolePath).href;
 let mainWindow;
 let serialAccessConfigured = false;
+let desktopApi;
+let apiConfiguration;
+const pendingApiCommands = new Map();
+
+function apiConfigurationPath() {
+  return path.join(app.getPath("userData"), "desktop-api.json");
+}
+
+function createApiToken() {
+  return randomBytes(24).toString("hex");
+}
+
+async function loadApiConfiguration() {
+  try {
+    const stored = JSON.parse(await readFile(apiConfigurationPath(), "utf8"));
+    return normalizeApiConfiguration(stored, createApiToken);
+  } catch (error) {
+    if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    return normalizeApiConfiguration(DEFAULT_API_CONFIGURATION, createApiToken);
+  }
+}
+
+async function saveApiConfiguration(configuration) {
+  const target = apiConfigurationPath();
+  const temporary = `${target}.tmp`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(temporary, `${JSON.stringify(configuration, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+  await rename(temporary, target);
+}
+
+function sendApiState(state = desktopApi?.state) {
+  if (state && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("desktop:api-state", state);
+  }
+}
+
+function dispatchApiCommand(command, argumentsValue) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return Promise.reject(new Error("Desktop console is unavailable."));
+  }
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingApiCommands.delete(requestId);
+      reject(new Error(`Desktop command "${command}" timed out.`));
+    }, 5000);
+    pendingApiCommands.set(requestId, { resolve, reject, timer });
+    mainWindow.webContents.send("desktop:api-command", {
+      requestId,
+      command,
+      arguments: argumentsValue
+    });
+  });
+}
 
 function ownsTrustedConsole(webContents) {
   return webContents === mainWindow?.webContents &&
@@ -149,8 +214,45 @@ ipcMain.handle("desktop:window-action", (event, action) => {
   if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
   return performWindowAction(mainWindow, action);
 });
+ipcMain.handle("desktop:get-api-configuration", event => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  return { configuration: apiConfiguration, state: desktopApi.state };
+});
+ipcMain.handle("desktop:set-api-configuration", async (event, value) => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  apiConfiguration = normalizeApiConfiguration({
+    ...value,
+    token: apiConfiguration.token
+  }, createApiToken);
+  await saveApiConfiguration(apiConfiguration);
+  const state = await desktopApi.reconfigure(apiConfiguration);
+  return { configuration: apiConfiguration, state };
+});
+ipcMain.on("desktop:api-snapshot", (event, snapshot) => {
+  if (ownsTrustedConsole(event.sender)) desktopApi.updateSnapshot(snapshot);
+});
+ipcMain.on("desktop:api-command-result", (event, result) => {
+  if (!ownsTrustedConsole(event.sender)) return;
+  const pending = pendingApiCommands.get(result?.requestId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingApiCommands.delete(result.requestId);
+  if (result.ok) pending.resolve(result.value);
+  else pending.reject(new Error(result.error || "Desktop API command failed."));
+});
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  apiConfiguration = await loadApiConfiguration();
+  desktopApi = new DesktopApiServer({
+    configuration: apiConfiguration,
+    dispatchCommand: dispatchApiCommand,
+    onStateChange: sendApiState
+  });
+  if (apiConfiguration.enabled) {
+    desktopApi.start().catch(error => {
+      console.error("Could not start desktop API server.", error);
+    });
+  }
   configureSerialAccess();
   installApplicationMenu();
   createWindow();
@@ -159,4 +261,12 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("before-quit", () => {
+  for (const pending of pendingApiCommands.values()) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error("Desktop application is quitting."));
+  }
+  pendingApiCommands.clear();
+  desktopApi?.stop().catch(() => {});
+});
 app.on("window-all-closed", () => app.quit());

@@ -277,6 +277,64 @@
     </section>
 
     <section id="parameters" class="page">
+      <article id="desktopApiPanel" class="panel" hidden>
+        <div class="panel-heading">
+          <div>
+            <h2>Desktop application API</h2>
+            <p>Expose the machine connected to this desktop console through an authenticated HTTP API.</p>
+          </div>
+          <span id="desktopApiState" class="status-badge offline">● Disabled</span>
+        </div>
+        <div class="api-badge-grid" aria-live="polite">
+          <div><span>Endpoint</span><strong id="desktopApiEndpoint">—</strong></div>
+          <div><span>Snapshot stream</span><strong id="desktopApiRateBadge">10 Hz</strong></div>
+          <div><span>Access</span><strong id="desktopApiAccessBadge">Read-only</strong></div>
+          <div><span>Machine link</span><strong id="desktopApiMachineBadge">Disconnected</strong></div>
+        </div>
+        <form id="desktopApiForm">
+          <div class="form-grid api-configuration-grid">
+            <label>Bind IP
+              <select id="desktopApiHost">
+                <option value="127.0.0.1">127.0.0.1 — this computer only</option>
+                <option value="0.0.0.0">0.0.0.0 — local network</option>
+              </select>
+            </label>
+            <label>TCP port
+              <input id="desktopApiPort" type="number" min="1024" max="65535" step="1" value="8787" required>
+            </label>
+            <label>Snapshot stream rate
+              <select id="desktopApiStreamRate">
+                <option value="1">1 Hz</option>
+                <option value="5">5 Hz</option>
+                <option value="10" selected>10 Hz</option>
+                <option value="20">20 Hz</option>
+                <option value="50">50 Hz</option>
+              </select>
+            </label>
+          </div>
+          <label class="checkbox-option">
+            <input id="desktopApiEnabled" type="checkbox">
+            Enable HTTP API when the desktop application is running
+          </label>
+          <label class="checkbox-option warning-option">
+            <input id="desktopApiAllowControl" type="checkbox">
+            Allow authenticated API clients to Arm, Run, Stop, and change the active profile
+          </label>
+          <div class="api-token-row">
+            <label>Bearer token
+              <input id="desktopApiToken" type="password" readonly>
+            </label>
+            <button id="toggleDesktopApiToken" type="button">Show</button>
+            <button id="copyDesktopApiToken" type="button">Copy token</button>
+          </div>
+          <p class="fault-banner">▲ Enabling LAN access or remote control lets other software reach the rig. Keep the token private, retain a physical emergency stop, and never treat the API as a safety system.</p>
+          <div class="action-row">
+            <button id="saveDesktopApi" type="submit">Apply API settings</button>
+            <a href="https://github.com/fxprime/mocking_machine/blob/main/docs/api.md" target="_blank" rel="noreferrer" class="button-link">API documentation</a>
+          </div>
+          <p id="desktopApiMessage" class="hint">The API is disabled by default.</p>
+        </form>
+      </article>
       <article class="panel">
         <div class="panel-heading"><div><h2>Current-sense protection</h2><p>Telemetry remains available when protection is disabled. Enable the trip only after the CS circuit is connected, filtered, and calibrated.</p></div></div>
         <label class="checkbox-option"><input id="currentSenseEnabled" type="checkbox"> Stop on measured current above the configured limit</label>

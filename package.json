@@ -18,6 +18,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "prestart": "node scripts/check-node-version.mjs",
     "start": "electron .",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --x64",

@@ -10,6 +10,10 @@ import {
   performWindowAction,
   windowChromeState
 } from "../desktop/window-chrome.mjs";
+import {
+  DesktopApiServer,
+  normalizeApiConfiguration
+} from "../desktop/api-server.mjs";
 
 const ports = [
   { portId: "one", displayName: "ESP32", vendorId: "10c4", productId: "ea60" },
@@ -64,6 +68,77 @@ assert.deepEqual(windowCalls, ["minimize", "maximize", "unmaximize", "close"]);
 assert.throws(() => performWindowAction(fakeWindow, "close", "darwin"), /Unsupported/);
 assert.throws(() => performWindowAction(fakeWindow, "unknown", "linux"), /Unsupported/);
 
+const normalizedApi = normalizeApiConfiguration({
+  enabled: true,
+  host: "public.example.com",
+  port: 80,
+  streamRateHz: 500,
+  allowControl: true
+}, () => "0123456789abcdef0123456789abcdef");
+assert.deepEqual(normalizedApi, {
+  enabled: true,
+  host: "127.0.0.1",
+  port: 8787,
+  streamRateHz: 10,
+  allowControl: true,
+  token: "0123456789abcdef0123456789abcdef"
+});
+
+const apiCommands = [];
+const apiServer = new DesktopApiServer({
+  configuration: {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 0,
+    streamRateHz: 10,
+    allowControl: false,
+    token: "0123456789abcdef0123456789abcdef"
+  },
+  dispatchCommand: async (command, argumentsValue) => {
+    apiCommands.push({ command, arguments: argumentsValue });
+    return { accepted: true };
+  }
+});
+apiServer.updateSnapshot({
+  connected: true,
+  machine: { state: 0, faults: 0 },
+  telemetry: { encoderCount: 9007199254740993n }
+});
+await apiServer.start();
+const apiEndpoint = apiServer.state.endpoint;
+assert.match(apiEndpoint, /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+const healthResponse = await fetch(`${apiEndpoint}/health`);
+assert.equal(healthResponse.status, 200);
+assert.equal((await healthResponse.json()).machineConnected, true);
+assert.equal((await fetch(`${apiEndpoint}/status`)).status, 401);
+const authenticatedStatus = await fetch(`${apiEndpoint}/status`, {
+  headers: { Authorization: "Bearer 0123456789abcdef0123456789abcdef" }
+});
+assert.equal(authenticatedStatus.status, 200);
+assert.equal((await authenticatedStatus.json()).telemetry.encoderCount, "9007199254740993");
+const disabledControl = await fetch(`${apiEndpoint}/commands/stop`, {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer 0123456789abcdef0123456789abcdef",
+    "Content-Type": "application/json"
+  },
+  body: "{}"
+});
+assert.equal(disabledControl.status, 403);
+await apiServer.reconfigure({ allowControl: true, port: 0 });
+const controlEndpoint = apiServer.state.endpoint;
+const controlResponse = await fetch(`${controlEndpoint}/commands/select-profile`, {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer 0123456789abcdef0123456789abcdef",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ profileId: 7 })
+});
+assert.equal(controlResponse.status, 200);
+assert.deepEqual(apiCommands, [{ command: "select-profile", arguments: { profileId: 7 } }]);
+await apiServer.stop();
+
 const calls = [];
 const fakeApp = {
   isPackaged: true,
@@ -93,7 +168,10 @@ const stylesSource = await readFile(new URL("../web/styles.css", import.meta.url
 const afterPackSource = await readFile(new URL("./after-pack.cjs", import.meta.url), "utf8");
 const macEntitlements = await readFile(new URL("../build/entitlements.mac.plist", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+const nvmVersion = (await readFile(new URL("../.nvmrc", import.meta.url), "utf8")).trim();
 assert.match(mainSource, /nodeIntegration:\s*false/);
+assert.match(mainSource, /import electronMain from "electron\/main";[\s\S]*const \{ app, BrowserWindow/);
+assert.match(preloadSource, /require\("electron\/renderer"\)/);
 assert.match(mainSource, /contextIsolation:\s*true/);
 assert.match(mainSource, /sandbox:\s*true/);
 assert.match(mainSource, /permission === "serial" && ownsTrustedConsole/);
@@ -104,15 +182,24 @@ assert.match(mainSource, /Menu\.setApplicationMenu\(null\)/);
 assert.match(mainSource, /Connecting synchronizes settings and telemetry only\. It does not arm or start the motor\./);
 assert.doesNotMatch(preloadSource, /require\(["'](?:node:)?(?:fs|child_process|path|os)/);
 assert.match(preloadSource, /performWindowAction:\s*action => ipcRenderer\.invoke\("desktop:window-action", action\)/);
+assert.match(preloadSource, /getApiConfiguration:\s*\(\) => ipcRenderer\.invoke\("desktop:get-api-configuration"\)/);
+assert.match(preloadSource, /publishApiSnapshot:\s*snapshot => ipcRenderer\.send\("desktop:api-snapshot", snapshot\)/);
 assert.match(indexSource, /id="windowTitleBar"[^>]*hidden/);
 assert.match(indexSource, /data-window-action="minimize"[\s\S]*data-window-action="toggle-maximize"[\s\S]*data-window-action="close"/);
 assert.match(stylesSource, /\.window-titlebar\s*\{[\s\S]*height:\s*44px[\s\S]*-webkit-app-region:\s*drag/);
 assert.match(stylesSource, /\.window-controls\s*\{[\s\S]*-webkit-app-region:\s*no-drag/);
 assert.match(stylesSource, /\.window-controls button\s*\{[\s\S]*width:\s*48px[\s\S]*min-height:\s*44px/);
 assert.match(indexSource, /id="launchAtLogin"[^>]*type="checkbox"/);
+assert.match(indexSource, /id="desktopApiPanel"[^>]*hidden/);
+assert.match(indexSource, /id="desktopApiHost"[\s\S]*127\.0\.0\.1[\s\S]*0\.0\.0\.0/);
+assert.match(indexSource, /id="desktopApiPort"[^>]*min="1024"[^>]*max="65535"/);
+assert.match(indexSource, /id="desktopApiStreamRate"/);
+assert.match(indexSource, /id="desktopApiAllowControl"/);
 assert.match(appSource, /initializeDesktopIntegration[\s\S]*getLaunchAtLogin\(\)[\s\S]*setLaunchAtLogin\(requested\)/);
 assert.match(appSource, /Opens the console only; the motor remains disarmed\./);
 assert.equal(packageJson.build.afterPack, "scripts/after-pack.cjs");
+assert.equal(nvmVersion, "22.12.0");
+assert.equal(packageJson.scripts.prestart, "node scripts/check-node-version.mjs");
 assert.equal(packageJson.scripts["dist:win"], "electron-builder --win --x64");
 assert.equal(packageJson.scripts["dist:linux"], "electron-builder --linux --x64");
 assert.equal(packageJson.build.win.signAndEditExecutable, false);

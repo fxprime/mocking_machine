@@ -112,6 +112,10 @@ let renderedMachineStatusKey;
 let recordedLoadConfiguration = [];
 let recordedLoadSettingId = 0;
 let recordedBrokenBearing = false;
+let latestDesktopApiTelemetry;
+let desktopApiConfiguration;
+let desktopApiServerState;
+const desktopApiPendingCommands = new Map();
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const $ = id => document.getElementById(id);
@@ -162,6 +166,114 @@ async function initializeDesktopIntegration() {
       checkbox.disabled = false;
       toast(`Could not change Launch at Login: ${error.message}`);
     }
+  });
+
+  await initializeDesktopApiIntegration(desktop);
+}
+
+function renderDesktopApiConfiguration() {
+  if (!desktopApiConfiguration || !desktopApiServerState) return;
+  $("desktopApiEnabled").checked = desktopApiConfiguration.enabled;
+  $("desktopApiHost").value = desktopApiConfiguration.host;
+  $("desktopApiPort").value = String(desktopApiConfiguration.port);
+  $("desktopApiStreamRate").value = String(desktopApiConfiguration.streamRateHz);
+  $("desktopApiAllowControl").checked = desktopApiConfiguration.allowControl;
+  $("desktopApiToken").value = desktopApiConfiguration.token;
+  $("desktopApiEndpoint").textContent = desktopApiServerState.endpoint || "—";
+  $("desktopApiRateBadge").textContent = `${desktopApiConfiguration.streamRateHz} Hz`;
+  $("desktopApiAccessBadge").textContent =
+      desktopApiConfiguration.allowControl ? "Remote control" : "Read-only";
+  $("desktopApiState").textContent = desktopApiServerState.running
+    ? "● Listening"
+    : desktopApiConfiguration.enabled ? "▲ Error" : "● Disabled";
+  $("desktopApiState").className =
+      `status-badge ${desktopApiServerState.running ? "online" :
+        desktopApiConfiguration.enabled ? "fault" : "offline"}`;
+  $("desktopApiMessage").textContent = desktopApiServerState.lastError
+    ? `Could not start API: ${desktopApiServerState.lastError}`
+    : desktopApiServerState.running
+      ? `Authenticated API available at ${desktopApiServerState.endpoint}.`
+      : "The API is disabled by default.";
+}
+
+async function initializeDesktopApiIntegration(desktop) {
+  const panel = $("desktopApiPanel");
+  panel.hidden = false;
+  desktop.onApiState?.(state => {
+    desktopApiServerState = state;
+    renderDesktopApiConfiguration();
+  });
+  desktop.onApiCommand?.(executeDesktopApiCommand);
+  try {
+    const current = await desktop.getApiConfiguration();
+    desktopApiConfiguration = current.configuration;
+    desktopApiServerState = current.state;
+    renderDesktopApiConfiguration();
+    publishDesktopApiSnapshot();
+  } catch (error) {
+    $("saveDesktopApi").disabled = true;
+    $("desktopApiMessage").textContent = `Could not load desktop API settings: ${error.message}`;
+    $("desktopApiState").textContent = "▲ Unavailable";
+    $("desktopApiState").className = "status-badge fault";
+  }
+
+  $("desktopApiForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const requested = {
+      enabled: $("desktopApiEnabled").checked,
+      host: $("desktopApiHost").value,
+      port: Number($("desktopApiPort").value),
+      streamRateHz: Number($("desktopApiStreamRate").value),
+      allowControl: $("desktopApiAllowControl").checked
+    };
+    $("saveDesktopApi").disabled = true;
+    try {
+      const updated = await desktop.setApiConfiguration(requested);
+      desktopApiConfiguration = updated.configuration;
+      desktopApiServerState = updated.state;
+      renderDesktopApiConfiguration();
+      toast(updated.state.running ? "Desktop API is listening." : "Desktop API disabled.");
+    } catch (error) {
+      $("desktopApiMessage").textContent = `Could not apply API settings: ${error.message}`;
+      $("desktopApiState").textContent = "▲ Error";
+      $("desktopApiState").className = "status-badge fault";
+    } finally {
+      $("saveDesktopApi").disabled = false;
+    }
+  });
+
+  $("toggleDesktopApiToken").addEventListener("click", () => {
+    const input = $("desktopApiToken");
+    input.type = input.type === "password" ? "text" : "password";
+    $("toggleDesktopApiToken").textContent = input.type === "password" ? "Show" : "Hide";
+  });
+  $("copyDesktopApiToken").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("desktopApiToken").value);
+      toast("Desktop API token copied.");
+    } catch (error) {
+      $("desktopApiToken").type = "text";
+      $("desktopApiToken").select();
+      toast("Select and copy the API token.");
+    }
+  });
+}
+
+function publishDesktopApiSnapshot() {
+  const desktop = globalThis.mockingMachineDesktop;
+  if (!desktop?.publishApiSnapshot) return;
+  if ($("desktopApiMachineBadge")) {
+    $("desktopApiMachineBadge").textContent = connected ? "Connected" : "Disconnected";
+  }
+  desktop.publishApiSnapshot({
+    connected,
+    machine: {
+      state: latestState,
+      faults: latestFaults,
+      selectedProfileId: runtimeProfileId ?? settings.profileId ?? null
+    },
+    settings: Number.isFinite(Number(settings.schema)) ? settings : null,
+    telemetry: latestDesktopApiTelemetry ?? null
   });
 }
 
@@ -215,22 +327,70 @@ function crc16(bytes) {
   return crc;
 }
 
-function frame(msgId, payload = new Uint8Array()) {
+function frame(msgId, payload = new Uint8Array(), frameSequence = sequence++) {
   const bytes = new Uint8Array(12 + payload.length);
   const view = new DataView(bytes.buffer);
   bytes[0] = SYNC_1; bytes[1] = SYNC_2; bytes[2] = VERSION; bytes[3] = 0;
-  view.setUint16(4, msgId, true); view.setUint16(6, sequence++, true); view.setUint16(8, payload.length, true);
+  view.setUint16(4, msgId, true); view.setUint16(6, frameSequence, true); view.setUint16(8, payload.length, true);
   bytes.set(payload, 10);
   view.setUint16(10 + payload.length, crc16(bytes.slice(2, 10 + payload.length)), true);
   return bytes;
 }
 
-async function sendFrame(msgId, payload) {
+async function sendFrame(msgId, payload, requestedSequence) {
   if (!writer) return;
-  const bytes = frame(msgId, payload);
+  const frameSequence = requestedSequence ?? sequence++;
+  const bytes = frame(msgId, payload, frameSequence);
   await writer.write(bytes);
   communicationMetrics.recordTxBytes(bytes.byteLength);
   communicationMetrics.recordTxMessage();
+  return frameSequence;
+}
+
+function sendDesktopApiCommandFrame(messageId, payload) {
+  if (!connected || !writer) return Promise.reject(new Error("Machine is not connected."));
+  const requestSequence = sequence++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      desktopApiPendingCommands.delete(requestSequence);
+      reject(new Error("Firmware did not acknowledge the API command."));
+    }, 3000);
+    desktopApiPendingCommands.set(requestSequence, { messageId, resolve, reject, timer });
+    sendFrame(messageId, payload, requestSequence).catch(error => {
+      clearTimeout(timer);
+      desktopApiPendingCommands.delete(requestSequence);
+      reject(error);
+    });
+  });
+}
+
+async function executeDesktopApiCommand(command, argumentsValue = {}) {
+  const empty = new Uint8Array();
+  if (command === "arm") return sendDesktopApiCommandFrame(MSG.ARM, empty);
+  if (command === "stop") return sendDesktopApiCommandFrame(MSG.STOP_RUN, empty);
+  if (command === "clear-faults") return sendDesktopApiCommandFrame(MSG.CLEAR_FAULTS, empty);
+  if (command === "start-stream") return sendDesktopApiCommandFrame(MSG.START_STREAM, empty);
+  if (command === "stop-stream") return sendDesktopApiCommandFrame(MSG.STOP_STREAM, empty);
+  if (command === "select-profile") {
+    const profileId = Number(argumentsValue.profileId);
+    if (!Number.isInteger(profileId) || profileId < 0 || profileId > 65535) {
+      throw new RangeError("profileId must be an integer from 0 to 65535.");
+    }
+    const payload = new Uint8Array(2);
+    new DataView(payload.buffer).setUint16(0, profileId, true);
+    const result = await sendDesktopApiCommandFrame(MSG.SELECT_PROFILE, payload);
+    runtimeProfileId = profileId;
+    renderProfiles();
+    publishDesktopApiSnapshot();
+    return result;
+  }
+  if (command === "run") {
+    if (argumentsValue.profileId !== undefined) {
+      await executeDesktopApiCommand("select-profile", argumentsValue);
+    }
+    return sendDesktopApiCommandFrame(MSG.START_RUN, empty);
+  }
+  throw new Error(`Unsupported desktop API command: ${command}`);
 }
 
 async function sendAscii(command) {
@@ -312,14 +472,19 @@ function parseRx() {
     const expected = packetView.getUint16(10 + length, true);
     if (crc16(packet.slice(2, 10 + length)) !== expected) { communicationMetrics.recordCrcError(); continue; }
     communicationMetrics.recordRxFrame();
-    handleMessage(packetView.getUint16(4, true), new DataView(packet.buffer, 10, length));
+    handleMessage(
+      packetView.getUint16(4, true),
+      new DataView(packet.buffer, 10, length),
+      packetView.getUint16(6, true)
+    );
   }
 }
 
-function handleMessage(id, data) {
+function handleMessage(id, data, messageSequence) {
   if (id === MSG.HEARTBEAT) {
     const state = data.getUint8(16); latestState = state;
     updateState(state, data.getUint32(12, true));
+    publishDesktopApiSnapshot();
     requestDeviceSynchronization().catch(() => {});
   } else if (id === MSG.SETTINGS) {
     settings = {
@@ -366,6 +531,7 @@ function handleMessage(id, data) {
       zeroIndexCalibrationSpeedRpm: data.byteLength >= 203 ? data.getFloat32(199, true) : 15,
       jerkLimitEnabled: data.byteLength >= 204 ? data.getUint8(203) !== 0 : true
     };
+    publishDesktopApiSnapshot();
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
     parameterDefinitions.rotorZeroOffsetTicks.max = Math.max(0, settings.cpr - 1);
     parameterDefinitions.zeroIndexCalibrationSpeedRpm.max =
@@ -414,6 +580,14 @@ function handleMessage(id, data) {
   } else if (id === MSG.TELEMETRY) {
     deviceSynchronizer.markTelemetryReceived();
     const sample = { timestamp: Number(data.getBigUint64(0, true)), zeroTime: Number(data.getBigUint64(8, true)), count: data.getBigInt64(16, true), zeroCount: data.getBigInt64(24, true), desired: data.getFloat32(32, true), measured: data.getFloat32(36, true), output: data.getFloat32(40, true), current: data.getFloat32(44, true), supplyVoltage: data.getFloat32(48, true), faults: data.getUint32(52, true), profile: data.getUint16(56, true), load: data.getUint8(58), state: data.getUint8(59), pTerm: data.byteLength >= 72 ? data.getFloat32(60, true) : 0, iTerm: data.byteLength >= 72 ? data.getFloat32(64, true) : 0, dTerm: data.byteLength >= 72 ? data.getFloat32(68, true) : 0, rotorPosition: data.byteLength >= 76 ? data.getFloat32(72, true) : Number.NaN, zeroSequence: data.byteLength >= 80 ? data.getUint32(76, true) : 0, zeroRejected: data.byteLength >= 84 ? data.getUint32(80, true) : 0 };
+    latestDesktopApiTelemetry = {
+      ...sample,
+      timestamp: data.getBigUint64(0, true).toString(),
+      zeroTime: data.getBigUint64(8, true).toString(),
+      count: sample.count.toString(),
+      zeroCount: sample.zeroCount.toString()
+    };
+    publishDesktopApiSnapshot();
     communicationMetrics.recordTelemetry(sample.timestamp, settings.streamRate);
     const recordedSampleCount = runRecorder.samples.length;
     runRecorder.consume(sample);
@@ -473,6 +647,13 @@ function handleMessage(id, data) {
   } else if (id === MSG.ACK) {
     const request = data.getUint16(0, true);
     const result = data.getUint8(2);
+    const desktopPending = desktopApiPendingCommands.get(messageSequence);
+    if (desktopPending?.messageId === request) {
+      clearTimeout(desktopPending.timer);
+      desktopApiPendingCommands.delete(messageSequence);
+      if (result === 0) desktopPending.resolve({ requestMessageId: request, result });
+      else desktopPending.reject(new Error(`Firmware rejected command: ${resultDescription(result)}.`));
+    }
     if (result === 0 && (request === MSG.START_RUN || request === MSG.START_VELOCITY_TEST ||
                          request === MSG.START_VELOCITY_SEQUENCE)) {
       runRecorder.begin();
@@ -1000,7 +1181,7 @@ function setConnected(value) {
   }
   setCurrentCalibrationBusy(false);
   setCurrentCalibrationDriveActive(value && currentCalibrationDriveActive);
-  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; recordedBrokenBearing = false; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; brokenBearing = false; brokenBearingSaved = false; bearingSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; zeroIndexCalibrationStatus = { stage: 0, clockwiseCount: 0, counterclockwiseCount: 0, referenceSide: 0, candidateValid: false, lastResult: 0, clockwiseRisingCorrection: 0, clockwiseFallingCorrection: 0, maximumResidual: 0 }; zeroIndexCalibrationAction = undefined; zeroIndexCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); }
+  if (!value) { latestState = 0; $("machineState").textContent = "DISCONNECTED"; samples = []; profiles = []; deviceSynchronizer.reset(); runRecorder.reset(); recordedLoadConfiguration = []; recordedLoadSettingId = 0; recordedBrokenBearing = false; renderedMachineStatusKey = undefined; finishProfileAction(); motorTestAction = undefined; overviewRunAction = undefined; defaultProfilePending = undefined; runtimeProfileId = undefined; loadConfiguration = []; loadConfigurationSaved = []; loadSavePending = false; brokenBearing = false; brokenBearingSaved = false; bearingSavePending = false; latestEncoderCount = undefined; rotorVisualState = undefined; latestRotorPosition = Number.NaN; latestRotorReferenced = false; latestDesktopApiTelemetry = undefined; rotorZeroCalibrationState = 0; rotorZeroCalibrationCandidate = Number.NaN; rotorZeroCalibrationPendingAction = undefined; zeroIndexCalibrationStatus = { stage: 0, clockwiseCount: 0, counterclockwiseCount: 0, referenceSide: 0, candidateValid: false, lastResult: 0, clockwiseRisingCorrection: 0, clockwiseFallingCorrection: 0, maximumResidual: 0 }; zeroIndexCalibrationAction = undefined; zeroIndexCalibrationPendingAction = undefined; encoderCalibrationStartCount = undefined; encoderCalibrationTurns = undefined; encoderCalibrationCandidate = undefined; encoderCalibrationSavePending = false; parameterImportDraft = undefined; parameterImportAction = undefined; if ($("parameterImportDialog").open) $("parameterImportDialog").close("disconnect"); $("encoderCalibrationResult").classList.add("hidden"); latestFaults = 0; $("clearFaultButton").disabled = true; characterizationRunning = false; $("abortCharacterization").disabled = true; profileTestActive = false; tuningTestActive = false; $("stopProfileTest").disabled = true; $("stopTuningTest").disabled = true; $("saveGains").disabled = true; setMotorTestActive(false); setCurrentCalibrationDriveActive(false); renderProfiles(); for (const pending of desktopApiPendingCommands.values()) { clearTimeout(pending.timer); pending.reject(new Error("Machine disconnected.")); } desktopApiPendingCommands.clear(); }
   renderMachineStateControl();
   updateExportButton();
   renderRunProfileDialog();
@@ -1008,6 +1189,7 @@ function setConnected(value) {
   renderEncoderCalibration();
   renderRotorZeroCalibration();
   renderZeroIndexCalibration();
+  publishDesktopApiSnapshot();
 }
 
 function resetCommunicationDisplay(isConnected) {

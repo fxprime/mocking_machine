@@ -247,6 +247,7 @@ CSV รุ่นปัจจุบันยังไม่ได้ฝัง fir
 - [การต่อสายและ commissioning](docs/wiring.md)
 - [สถาปัตยกรรมผลิตภัณฑ์และเฟิร์มแวร์](docs/architecture.md)
 - [Serial protocol reference](docs/protocol.md)
+- [JavaScript and desktop HTTP API](docs/api.md)
 - [การควบคุมความเร็วต่ำ](docs/low-speed-control.md)
 - [การประเมิน step response](docs/step-response-estimation.md)
 

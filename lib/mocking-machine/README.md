@@ -140,4 +140,6 @@ Command methods reject with `MachineCommandError` when firmware returns a non-OK
 `MachineTimeoutError` when no correlated response arrives. Subscribe to `message` for every decoded
 message, or to lowercase message names such as `heartbeat`, `telemetry`, and `settings`.
 
-See [`docs/protocol.md`](../../docs/protocol.md) for the complete wire specification and enum values.
+See the complete [API guide](../../docs/api.md) for desktop compatibility, every client method, the
+authenticated desktop HTTP API, and examples. See
+[`docs/protocol.md`](../../docs/protocol.md) for the complete wire specification and enum values.
