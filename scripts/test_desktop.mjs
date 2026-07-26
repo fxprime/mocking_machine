@@ -35,6 +35,9 @@ const mainSource = await readFile(new URL("../desktop/main.mjs", import.meta.url
 const preloadSource = await readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../web/index.html", import.meta.url), "utf8");
+const afterPackSource = await readFile(new URL("./after-pack.cjs", import.meta.url), "utf8");
+const macEntitlements = await readFile(new URL("../build/entitlements.mac.plist", import.meta.url), "utf8");
+const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 assert.match(mainSource, /nodeIntegration:\s*false/);
 assert.match(mainSource, /contextIsolation:\s*true/);
 assert.match(mainSource, /sandbox:\s*true/);
@@ -44,5 +47,10 @@ assert.doesNotMatch(preloadSource, /require\(["'](?:node:)?(?:fs|child_process|p
 assert.match(indexSource, /id="launchAtLogin"[^>]*type="checkbox"/);
 assert.match(appSource, /initializeDesktopIntegration[\s\S]*getLaunchAtLogin\(\)[\s\S]*setLaunchAtLogin\(requested\)/);
 assert.match(appSource, /Opens the console only; the motor remains disarmed\./);
+assert.equal(packageJson.build.afterPack, "scripts/after-pack.cjs");
+assert.match(afterPackSource, /signAsync\(\{[\s\S]*identity:\s*"-"[\s\S]*identityValidation:\s*false/);
+assert.match(afterPackSource, /optionsForFile\(filePath\)[\s\S]*filePath\.endsWith\("\.app"\)[\s\S]*entitlements:\s*entitlementsPath/);
+assert.match(afterPackSource, /codesign"[\s\S]*"--verify"[\s\S]*"--deep"[\s\S]*"--strict"/);
+assert.match(macEntitlements, /com\.apple\.security\.cs\.disable-library-validation/);
 
 console.log("Desktop shell checks passed.");

@@ -192,6 +192,8 @@ npm run dist:mac
 
 ผลลัพธ์อยู่ใน `dist/` การแจกจ่ายให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ใน environment ของ build ตามเอกสาร electron-builder ก่อนสร้าง release
 
+เมื่อ environment ไม่มี Developer ID ขั้นตอน `afterPack` จะลงลายเซ็นแบบ ad-hoc ให้ Electron bundle ตามลำดับ leaf-to-root และตรวจด้วย `codesign --verify --deep --strict` ก่อนสร้าง DMG/ZIP ลายเซ็นนี้รักษาความสมบูรณ์ของ bundle แต่ไม่แทน Apple notarization ผู้ใช้ preview build อาจยังต้องคลิกขวาแล้วเลือก **Open** หรือรัน `xattr -cr "/Applications/Mocking Machine.app"` ห้ามซ่อม Electron bundle ด้วย `codesign --deep` โดยตรง เพราะอาจทิ้ง nested frameworks ไว้ในสถานะลงลายเซ็นเพียงบางส่วน
+
 แอปที่ติดตั้งแล้วมีตัวเลือก **Launch at login** ใน footer ตัวเลือกนี้เปิดเฉพาะ console และไม่เชื่อมต่อ ไม่ Arm และไม่สั่งมอเตอร์หมุนโดยอัตโนมัติ การเลือกพอร์ต ESP32 ยังคงเกิดหลังผู้ใช้กด **Connect** และการเริ่มมอเตอร์ยังผ่าน safety confirmation เดิมทั้งหมด
 
 การกด Connect จะเริ่มเฉพาะการ sync configuration และ telemetry เท่านั้น ผู้ใช้ยังต้อง Arm และยืนยันความปลอดภัยก่อนสั่งให้มอเตอร์หมุน
