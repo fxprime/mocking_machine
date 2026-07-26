@@ -49,6 +49,13 @@ jobs:
       - run: npm run test:web
       - run: ${{ matrix.command }}
 
+      - name: Create Windows ZIP
+        if: matrix.platform == 'Windows'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath "dist/mocking-machine-console-$version-windows-x64.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: mocking-machine-${{ matrix.platform }}
