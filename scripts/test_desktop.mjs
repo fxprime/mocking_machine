@@ -209,7 +209,7 @@ assert.equal(packageJson.scripts.prestart, "node scripts/check-node-version.mjs"
 assert.equal(packageJson.scripts["dist:win"], "electron-builder --win --x64");
 assert.equal(packageJson.scripts["dist:linux"], "electron-builder --linux --x64");
 assert.equal(packageJson.build.win.signAndEditExecutable, false);
-assert.deepEqual(packageJson.build.win.target.map(({ target }) => target), ["nsis", "portable"]);
+assert.deepEqual(packageJson.build.win.target.map(({ target }) => target), ["nsis", "portable", "zip"]);
 assert.deepEqual(packageJson.build.linux.target.map(({ target }) => target), ["AppImage", "deb"]);
 assert.notEqual(packageJson.build.nsis.artifactName, packageJson.build.portable.artifactName);
 for (const artifactName of [

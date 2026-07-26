@@ -1,7 +1,7 @@
 {
   "name": "mocking-machine-console",
   "productName": "Mocking Machine",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Desktop console for the Mocking Machine rotating machinery test rig",
   "author": {
     "name": "Thanabadee Bulunseechart, Modulemore Co., Ltd.",
@@ -68,6 +68,12 @@
         },
         {
           "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64"
           ]
