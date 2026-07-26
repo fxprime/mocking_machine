@@ -83,4 +83,5 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Mocking Machine $GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          generated_notes="$(gh api --method POST "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body)"
+          gh release edit "$GITHUB_REF_NAME" --title "Mocking Machine $GITHUB_REF_NAME" --notes "$generated_notes" --draft=false
