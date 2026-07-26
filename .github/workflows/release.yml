@@ -18,19 +18,19 @@ jobs:
         include:
           - platform: macOS
             runner: macos-latest
-            command: npm run dist:mac -- --publish never
+            command: npm run dist:mac -- --publish=never
             artifacts: |
               dist/*.dmg
               dist/*.zip
           - platform: Linux
             runner: ubuntu-latest
-            command: npm run dist:linux -- --publish never
+            command: npm run dist:linux -- --publish=never
             artifacts: |
               dist/*.AppImage
               dist/*.deb
           - platform: Windows
             runner: windows-latest
-            command: npm run dist:win -- --publish never
+            command: npm run dist:win -- --publish=never
             artifacts: |
               dist/*-setup.exe
               dist/*-portable.exe
