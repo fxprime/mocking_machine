@@ -173,9 +173,9 @@ python3 -m http.server 8080 -d web
 4. ทำ calibration และ motor characterization ขณะยังไม่มีมวลไม่สมดุล
 5. ทดสอบที่ duty/velocity ต่ำก่อนติดตั้งมวลจริง
 
-## macOS desktop app
+## Desktop apps
 
-GUI ชุดเดียวกันสามารถรันเป็นแอป Electron บน macOS โดยไม่ต้องเปิด Chrome หรือรัน local web server:
+GUI ชุดเดียวกันสามารถรันเป็นแอป Electron บน macOS, Windows และ Linux โดยไม่ต้องเปิด Chrome หรือรัน local web server:
 
 ```sh
 npm install
@@ -190,11 +190,23 @@ npm start
 npm run dist:mac
 ```
 
-ผลลัพธ์อยู่ใน `dist/` การแจกจ่ายให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ใน environment ของ build ตามเอกสาร electron-builder ก่อนสร้าง release
+สร้าง Windows x64 แบบ NSIS installer และ portable executable:
+
+```sh
+npm run dist:win
+```
+
+สร้าง Linux x64 แบบ AppImage และ Debian package สำหรับ Ubuntu/Debian:
+
+```sh
+npm run dist:linux
+```
+
+ผลลัพธ์อยู่ใน `dist/` การแจกจ่าย macOS ให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ส่วน Windows production release ควรใช้ Windows code-signing certificate ก่อนสร้าง release
 
 เมื่อ environment ไม่มี Developer ID ขั้นตอน `afterPack` จะลงลายเซ็นแบบ ad-hoc ให้ Electron bundle ตามลำดับ leaf-to-root และตรวจด้วย `codesign --verify --deep --strict` ก่อนสร้าง DMG/ZIP ลายเซ็นนี้รักษาความสมบูรณ์ของ bundle แต่ไม่แทน Apple notarization ผู้ใช้ preview build อาจยังต้องคลิกขวาแล้วเลือก **Open** หรือรัน `xattr -cr "/Applications/Mocking Machine.app"` ห้ามซ่อม Electron bundle ด้วย `codesign --deep` โดยตรง เพราะอาจทิ้ง nested frameworks ไว้ในสถานะลงลายเซ็นเพียงบางส่วน
 
-แอปที่ติดตั้งแล้วมีตัวเลือก **Launch at login** ใน footer ตัวเลือกนี้เปิดเฉพาะ console และไม่เชื่อมต่อ ไม่ Arm และไม่สั่งมอเตอร์หมุนโดยอัตโนมัติ การเลือกพอร์ต ESP32 ยังคงเกิดหลังผู้ใช้กด **Connect** และการเริ่มมอเตอร์ยังผ่าน safety confirmation เดิมทั้งหมด
+แอป macOS และ Windows ที่ติดตั้งแล้วมีตัวเลือก **Launch at login** ใน footer ตัวเลือกนี้เปิดเฉพาะ console และไม่เชื่อมต่อ ไม่ Arm และไม่สั่งมอเตอร์หมุนโดยอัตโนมัติ Linux build ยังไม่เปิดตัวเลือกนี้ การเลือกพอร์ต ESP32 ยังคงเกิดหลังผู้ใช้กด **Connect** และการเริ่มมอเตอร์ยังผ่าน safety confirmation เดิมทั้งหมด
 
 การกด Connect จะเริ่มเฉพาะการ sync configuration และ telemetry เท่านั้น ผู้ใช้ยังต้อง Arm และยืนยันความปลอดภัยก่อนสั่งให้มอเตอร์หมุน
 

@@ -27,9 +27,13 @@ const fakeApp = {
 assert.deepEqual(getLaunchAtLoginState(fakeApp, "darwin"), { supported: true, enabled: false });
 assert.deepEqual(setLaunchAtLoginState(fakeApp, true, "darwin"), { supported: true, enabled: true });
 assert.deepEqual(calls, [{ openAtLogin: true }]);
+fakeApp.openAtLogin = false;
+assert.deepEqual(getLaunchAtLoginState(fakeApp, "win32"), { supported: true, enabled: false });
+assert.deepEqual(setLaunchAtLoginState(fakeApp, true, "win32"), { supported: true, enabled: true });
+assert.deepEqual(getLaunchAtLoginState(fakeApp, "linux"), { supported: false, enabled: false });
 fakeApp.isPackaged = false;
 assert.deepEqual(getLaunchAtLoginState(fakeApp, "darwin"), { supported: false, enabled: false });
-assert.throws(() => setLaunchAtLoginState(fakeApp, true, "darwin"), /installed macOS application/);
+assert.throws(() => setLaunchAtLoginState(fakeApp, true, "darwin"), /installed macOS and Windows applications/);
 
 const mainSource = await readFile(new URL("../desktop/main.mjs", import.meta.url), "utf8");
 const preloadSource = await readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8");
@@ -48,6 +52,21 @@ assert.match(indexSource, /id="launchAtLogin"[^>]*type="checkbox"/);
 assert.match(appSource, /initializeDesktopIntegration[\s\S]*getLaunchAtLogin\(\)[\s\S]*setLaunchAtLogin\(requested\)/);
 assert.match(appSource, /Opens the console only; the motor remains disarmed\./);
 assert.equal(packageJson.build.afterPack, "scripts/after-pack.cjs");
+assert.equal(packageJson.scripts["dist:win"], "electron-builder --win --x64");
+assert.equal(packageJson.scripts["dist:linux"], "electron-builder --linux --x64");
+assert.equal(packageJson.build.win.signAndEditExecutable, false);
+assert.deepEqual(packageJson.build.win.target.map(({ target }) => target), ["nsis", "portable"]);
+assert.deepEqual(packageJson.build.linux.target.map(({ target }) => target), ["AppImage", "deb"]);
+assert.notEqual(packageJson.build.nsis.artifactName, packageJson.build.portable.artifactName);
+for (const artifactName of [
+  packageJson.build.artifactName,
+  packageJson.build.nsis.artifactName,
+  packageJson.build.portable.artifactName,
+  packageJson.build.linux.artifactName,
+  packageJson.build.deb.artifactName
+]) {
+  assert.match(artifactName, /^\$\{name\}-/);
+}
 assert.match(afterPackSource, /signAsync\(\{[\s\S]*identity:\s*"-"[\s\S]*identityValidation:\s*false/);
 assert.match(afterPackSource, /optionsForFile\(filePath\)[\s\S]*filePath\.endsWith\("\.app"\)[\s\S]*entitlements:\s*entitlementsPath/);
 assert.match(afterPackSource, /codesign"[\s\S]*"--verify"[\s\S]*"--deep"[\s\S]*"--strict"/);
