@@ -70,6 +70,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
@@ -84,4 +88,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Mocking Machine $GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
           generated_notes="$(gh api --method POST "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body)"
-          gh release edit "$GITHUB_REF_NAME" --title "Mocking Machine $GITHUB_REF_NAME" --notes "$generated_notes" --draft=false
+          previous_tag="$(git tag --sort=-version:refname | grep -Fxv "$GITHUB_REF_NAME" | head -1)"
+          commit_notes="$(git log --pretty='- %s' "$previous_tag..$GITHUB_REF_NAME")"
+          notes="$(printf '## What’s changed\n\n%s\n\n%s' "$commit_notes" "$generated_notes")"
+          gh release edit "$GITHUB_REF_NAME" --title "Mocking Machine $GITHUB_REF_NAME" --notes "$notes" --draft=false
