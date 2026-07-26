@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("mockingMachineDesktop", Object.freeze({
   performWindowAction: action => ipcRenderer.invoke("desktop:window-action", action),
   getApiConfiguration: () => ipcRenderer.invoke("desktop:get-api-configuration"),
   copyApiToken: () => ipcRenderer.invoke("desktop:copy-api-token"),
+  saveCsvFile: file => ipcRenderer.invoke("desktop:save-csv-file", file),
   setApiConfiguration: configuration =>
     ipcRenderer.invoke("desktop:set-api-configuration", configuration),
   publishApiSnapshot: snapshot => ipcRenderer.send("desktop:api-snapshot", snapshot),

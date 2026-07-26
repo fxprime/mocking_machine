@@ -20,6 +20,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } =
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const consolePath = path.join(desktopDirectory, "..", "web", "index.html");
 const consoleUrl = pathToFileURL(consolePath).href;
+const MAX_CSV_EXPORT_BYTES = 128 * 1024 * 1024;
 let mainWindow;
 let serialAccessConfigured = false;
 let desktopApi;
@@ -221,6 +222,25 @@ ipcMain.handle("desktop:get-api-configuration", event => {
 ipcMain.handle("desktop:copy-api-token", event => {
   if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
   clipboard.writeText(apiConfiguration.token);
+});
+ipcMain.handle("desktop:save-csv-file", async (event, value) => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  const fileName = path.basename(String(value?.fileName ?? ""));
+  const contents = String(value?.contents ?? "");
+  if (!fileName || !fileName.toLowerCase().endsWith(".csv")) {
+    throw new Error("A valid CSV file name is required.");
+  }
+  if (Buffer.byteLength(contents, "utf8") > MAX_CSV_EXPORT_BYTES) {
+    throw new Error("CSV export exceeds the 128 MiB desktop limit.");
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: `Save ${fileName}`,
+    defaultPath: path.join(app.getPath("downloads"), fileName),
+    filters: [{ name: "CSV files", extensions: ["csv"] }]
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  await writeFile(result.filePath, contents, "utf8");
+  return { saved: true, fileName: path.basename(result.filePath) };
 });
 ipcMain.handle("desktop:set-api-configuration", async (event, value) => {
   if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");

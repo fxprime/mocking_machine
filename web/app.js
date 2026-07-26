@@ -1351,9 +1351,12 @@ function updateExportFileSummary() {
   const baseName = exportBaseName();
   const files = [`${baseName}.csv`];
   if (recordedLoadConfiguration.length) files.push(`${baseName}-loads.csv`);
+  const desktopSave = Boolean(globalThis.mockingMachineDesktop?.saveCsvFile);
   $("exportFileSummary").textContent = recordedLoadConfiguration.length
-    ? `Two files will be downloaded: ${files.join(" and ")}. The run CSV includes bearing condition; the load CSV contains load details only. Your browser may ask to allow multiple downloads.`
-    : `One file will be downloaded: ${files[0]}. It includes the recorded bearing condition; no saved rotor loads were active for this run.`;
+    ? desktopSave
+      ? `Two files will be saved with separate confirmations: ${files.join(" and ")}. The run CSV includes bearing condition; the load CSV contains load details only.`
+      : `Two files will be downloaded: ${files.join(" and ")}. The run CSV includes bearing condition; the load CSV contains load details only. Your browser may ask to allow multiple downloads.`
+    : `One file will be ${desktopSave ? "saved" : "downloaded"}: ${files[0]}. It includes the recorded bearing condition; no saved rotor loads were active for this run.`;
 }
 
 function downloadCsv(fileName, contents) {
@@ -1365,6 +1368,15 @@ function downloadCsv(fileName, contents) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function saveCsvFile(fileName, contents) {
+  const desktop = globalThis.mockingMachineDesktop;
+  if (desktop?.saveCsvFile) {
+    return desktop.saveCsvFile({ fileName, contents });
+  }
+  downloadCsv(fileName, contents);
+  return { saved: true, fileName };
 }
 
 function renderTelemetry(sample) {
@@ -3320,19 +3332,33 @@ $("exportButton").addEventListener("click", () => {
   $("exportBaseName").select();
 });
 $("exportBaseName").addEventListener("input", updateExportFileSummary);
-$("exportForm").addEventListener("submit", event => {
+$("exportForm").addEventListener("submit", async event => {
   if (event.submitter?.value !== "export") return;
   event.preventDefault();
   const baseName = exportBaseName();
-  downloadCsv(`${baseName}.csv`, createTelemetryCsv(runRecorder.samples, recordedBrokenBearing));
-  if (recordedLoadConfiguration.length) {
-    downloadCsv(`${baseName}-loads.csv`,
-      createLoadConfigurationCsv(recordedLoadSettingId, recordedLoadConfiguration));
+  try {
+    const runResult = await saveCsvFile(
+      `${baseName}.csv`,
+      createTelemetryCsv(runRecorder.samples, recordedBrokenBearing)
+    );
+    if (!runResult.saved) return toast("Run CSV export canceled.");
+    let loadsSaved = true;
+    if (recordedLoadConfiguration.length) {
+      const loadResult = await saveCsvFile(
+        `${baseName}-loads.csv`,
+        createLoadConfigurationCsv(recordedLoadSettingId, recordedLoadConfiguration)
+      );
+      loadsSaved = loadResult.saved;
+    }
+    $("exportDialog").close("export");
+    toast(recordedLoadConfiguration.length
+      ? loadsSaved
+        ? "Run data, bearing condition, and rotor load information exported."
+        : "Run CSV exported; rotor load CSV export canceled."
+      : "Run data and bearing condition exported.");
+  } catch (error) {
+    toast(`Could not export CSV: ${error.message}`);
   }
-  $("exportDialog").close("export");
-  toast(recordedLoadConfiguration.length
-    ? "Run data, bearing condition, and rotor load information exported."
-    : "Run data and bearing condition exported.");
 });
 window.addEventListener("beforeunload", () => { clearInterval(motorTestTimer); clearInterval(currentCalibrationDriveTimer); if (connected) sendFrame(MSG.STOP_RUN); });
 setMotorTestDuty(0.10);

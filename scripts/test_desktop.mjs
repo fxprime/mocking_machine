@@ -185,8 +185,12 @@ assert.match(preloadSource, /performWindowAction:\s*action => ipcRenderer\.invok
 assert.match(preloadSource, /getApiConfiguration:\s*\(\) => ipcRenderer\.invoke\("desktop:get-api-configuration"\)/);
 assert.match(preloadSource, /copyApiToken:\s*\(\) => ipcRenderer\.invoke\("desktop:copy-api-token"\)/,
   "The sandboxed renderer must use the desktop clipboard bridge");
+assert.match(preloadSource, /saveCsvFile:\s*file => ipcRenderer\.invoke\("desktop:save-csv-file", file\)/,
+  "CSV exports must use the desktop save-dialog bridge");
 assert.match(mainSource, /ipcMain\.handle\("desktop:copy-api-token"[\s\S]*clipboard\.writeText\(apiConfiguration\.token\)/,
   "Only the trusted console may copy the configured API token");
+assert.match(mainSource, /ipcMain\.handle\("desktop:save-csv-file"[\s\S]*dialog\.showSaveDialog[\s\S]*writeFile/,
+  "Each desktop CSV must be confirmed and written through a native save dialog");
 assert.match(appSource, /desktop\.copyApiToken[\s\S]*navigator\.clipboard\.writeText/,
   "The copy button must prefer Electron's clipboard and retain a browser fallback");
 assert.match(preloadSource, /publishApiSnapshot:\s*snapshot => ipcRenderer\.send\("desktop:api-snapshot", snapshot\)/);
