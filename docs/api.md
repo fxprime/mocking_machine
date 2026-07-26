@@ -119,17 +119,28 @@ import {
 } from "@modulemore/mocking-machine-api";
 import { SerialPort } from "serialport";
 
+const serialPath = process.env.MOCKING_MACHINE_PORT ?? (
+  process.platform === "darwin"
+    ? "/dev/cu.usbserial-0001"
+    : "/dev/ttyUSB0"
+);
+const baudRate = Number(process.env.MOCKING_MACHINE_BAUD ?? 115200);
+
 const port = new SerialPort({
-  path: "/dev/ttyUSB0",
-  baudRate: 115200,
+  path: serialPath,
+  baudRate,
   autoOpen: false
 });
 
 const transport = new CallbackTransport({
   open: () => new Promise((resolve, reject) =>
     port.open(error => error ? reject(error) : resolve())),
-  write: bytes => new Promise((resolve, reject) =>
-    port.write(bytes, error => error ? reject(error) : port.drain(resolve))),
+  write: bytes => new Promise((resolve, reject) => {
+    port.write(bytes, error => {
+      if (error) return reject(error);
+      port.drain(drainError => drainError ? reject(drainError) : resolve());
+    });
+  }),
   subscribe: (onData, onError) => {
     port.on("data", onData);
     port.on("error", onError);
@@ -138,16 +149,65 @@ const transport = new CallbackTransport({
       port.off("error", onError);
     };
   },
-  close: () => new Promise((resolve, reject) =>
-    port.close(error => error ? reject(error) : resolve()))
+  close: () => new Promise((resolve, reject) => {
+    if (!port.isOpen) return resolve();
+    port.close(error => error ? reject(error) : resolve());
+  })
 });
 
-const machine = new MockingMachineClient({ transport });
-await machine.connect();
-await machine.startStream();
+const machine = new MockingMachineClient({
+  transport,
+  requestTimeoutMs: 5000
+});
+
+function waitForHeartbeat(timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`No firmware heartbeat within ${timeoutMs} ms`));
+    }, timeoutMs);
+    const unsubscribe = machine.on("heartbeat", heartbeat => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(heartbeat);
+    });
+  });
+}
+
+try {
+  // Opening a USB serial adapter can reset the ESP32. Register before opening,
+  // then wait until firmware startup has completed before making requests.
+  const ready = waitForHeartbeat();
+  await machine.connect();
+  await ready;
+
+  const settings = await machine.getSettings();
+  await machine.startStream();
+  console.log(settings);
+} finally {
+  await machine.disconnect().catch(() => {});
+}
 ```
 
 `serialport` is illustrative and is not included as a dependency.
+
+Only one process may own the physical serial adapter. Disconnect or quit the Mocking Machine
+desktop application before using this direct Node adapter. If the desktop must remain connected,
+use the authenticated HTTP API instead.
+
+On macOS, use the outbound `/dev/cu.*` device rather than its `/dev/tty.*` counterpart. The baud
+must match the value persisted in the firmware settings; it is not necessarily the default
+115200 bit/s. Supported GUI choices are 115200, 230400, 460800, and 921600 bit/s. For example, a
+machine configured for 460800 bit/s can be tested with:
+
+```bash
+MOCKING_MACHINE_PORT=/dev/cu.usbserial-0001 \
+MOCKING_MACHINE_BAUD=460800 \
+node test_hw.mjs
+```
+
+If `GET_SETTINGS (0x0100)` times out on sequence 1, check serial ownership and baud first. Receiving
+bytes without any valid heartbeat or `0xAA55` frame sync strongly indicates a baud mismatch.
 
 ### Transport contract
 
