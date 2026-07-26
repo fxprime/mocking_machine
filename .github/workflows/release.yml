@@ -83,3 +83,4 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Mocking Machine $GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false
