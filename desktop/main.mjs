@@ -2,7 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } from "elect
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getLaunchAtLoginState, setLaunchAtLoginState } from "./login-item.mjs";
-import { selectedSerialPortId, serialPortLabel } from "./serial-port.mjs";
+import {
+  selectableSerialPorts,
+  selectedSerialPortId,
+  serialPortLabel
+} from "./serial-port.mjs";
 
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const consolePath = path.join(desktopDirectory, "..", "web", "index.html");
@@ -30,11 +34,16 @@ function configureSerialAccess() {
   applicationSession.on("select-serial-port", async (event, portList, webContents, callback) => {
     event.preventDefault();
     if (!ownsTrustedConsole(webContents)) return callback("");
-    if (!portList.length) {
+    const selectablePorts = selectableSerialPorts(portList);
+    if (!selectablePorts.length) {
       await dialog.showMessageBox(mainWindow, {
         type: "warning",
-        message: "No serial devices found",
-        detail: "Connect the ESP32 by USB, then try again.",
+        message: process.platform === "linux"
+          ? "No USB serial devices found"
+          : "No serial devices found",
+        detail: process.platform === "linux"
+          ? "Connect the ESP32 and check for /dev/ttyUSB* or /dev/ttyACM*, then try again."
+          : "Connect the ESP32 by USB, then try again.",
         buttons: ["OK"]
       });
       return callback("");
@@ -45,12 +54,12 @@ function configureSerialAccess() {
       title: "Connect Mocking Machine",
       message: "Choose the ESP32 serial port",
       detail: "Connecting synchronizes settings and telemetry only. It does not arm or start the motor.",
-      buttons: ["Cancel", ...portList.map(serialPortLabel)],
+      buttons: ["Cancel", ...selectablePorts.map(serialPortLabel)],
       cancelId: 0,
-      defaultId: portList.length === 1 ? 1 : 0,
+      defaultId: selectablePorts.length === 1 ? 1 : 0,
       noLink: true
     });
-    callback(selectedSerialPortId(portList, result.response));
+    callback(selectedSerialPortId(selectablePorts, result.response));
   });
 }
 

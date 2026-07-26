@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { getLaunchAtLoginState, setLaunchAtLoginState } from "../desktop/login-item.mjs";
-import { selectedSerialPortId, serialPortLabel } from "../desktop/serial-port.mjs";
+import {
+  selectableSerialPorts,
+  selectedSerialPortId,
+  serialPortLabel
+} from "../desktop/serial-port.mjs";
 
 const ports = [
   { portId: "one", displayName: "ESP32", vendorId: "10c4", productId: "ea60" },
@@ -13,6 +17,23 @@ assert.equal(selectedSerialPortId(ports, 0), "");
 assert.equal(selectedSerialPortId(ports, 1), "one");
 assert.equal(selectedSerialPortId(ports, 2), "two");
 assert.equal(selectedSerialPortId(ports, 3), "");
+
+const linuxPorts = [
+  { portId: "builtin", portName: "/dev/ttyS0" },
+  { portId: "usb", portName: "/dev/ttyUSB0" },
+  { portId: "acm", displayName: "ttyACM1" },
+  { portId: "by-id", portName: "/dev/serial/by-id/usb-Espressif_ESP32" },
+  { portId: "metadata", displayName: "CP2102", vendorId: "10c4" }
+];
+assert.deepEqual(
+  selectableSerialPorts(linuxPorts, "linux").map(({ portId }) => portId),
+  ["usb", "acm", "by-id", "metadata"]
+);
+assert.deepEqual(selectableSerialPorts(linuxPorts, "darwin"), linuxPorts);
+assert.deepEqual(selectableSerialPorts(
+  [{ portId: "builtin", portName: "/dev/ttyS1" }],
+  "linux"
+), []);
 
 const calls = [];
 const fakeApp = {
@@ -46,6 +67,8 @@ assert.match(mainSource, /nodeIntegration:\s*false/);
 assert.match(mainSource, /contextIsolation:\s*true/);
 assert.match(mainSource, /sandbox:\s*true/);
 assert.match(mainSource, /permission === "serial" && ownsTrustedConsole/);
+assert.match(mainSource, /selectableSerialPorts\(portList\)/);
+assert.match(mainSource, /\/dev\/ttyUSB\*/);
 assert.match(mainSource, /Connecting synchronizes settings and telemetry only\. It does not arm or start the motor\./);
 assert.doesNotMatch(preloadSource, /require\(["'](?:node:)?(?:fs|child_process|path|os)/);
 assert.match(indexSource, /id="launchAtLogin"[^>]*type="checkbox"/);

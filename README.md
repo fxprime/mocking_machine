@@ -202,6 +202,12 @@ npm run dist:win
 npm run dist:linux
 ```
 
+บน Ubuntu/Linux ตัวเลือกพอร์ตของ desktop app จะแสดงเฉพาะ USB serial เช่น `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/serial/by-id/*` หรืออุปกรณ์ที่มี USB VID/PID และจะไม่แสดง built-in UART `/dev/ttyS*` หากเปิดพอร์ตไม่ได้ให้เพิ่มผู้ใช้เข้า group `dialout` แล้ว logout/login:
+
+```sh
+sudo usermod -aG dialout "$USER"
+```
+
 ผลลัพธ์อยู่ใน `dist/` การแจกจ่าย macOS ให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ส่วน Windows production release ควรใช้ Windows code-signing certificate ก่อนสร้าง release
 
 เมื่อ environment ไม่มี Developer ID ขั้นตอน `afterPack` จะลงลายเซ็นแบบ ad-hoc ให้ Electron bundle ตามลำดับ leaf-to-root และตรวจด้วย `codesign --verify --deep --strict` ก่อนสร้าง DMG/ZIP ลายเซ็นนี้รักษาความสมบูรณ์ของ bundle แต่ไม่แทน Apple notarization ผู้ใช้ preview build อาจยังต้องคลิกขวาแล้วเลือก **Open** หรือรัน `xattr -cr "/Applications/Mocking Machine.app"` ห้ามซ่อม Electron bundle ด้วย `codesign --deep` โดยตรง เพราะอาจทิ้ง nested frameworks ไว้ในสถานะลงลายเซ็นเพียงบางส่วน
