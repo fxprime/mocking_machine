@@ -6,6 +6,10 @@ import {
   selectedSerialPortId,
   serialPortLabel
 } from "../desktop/serial-port.mjs";
+import {
+  performWindowAction,
+  windowChromeState
+} from "../desktop/window-chrome.mjs";
 
 const ports = [
   { portId: "one", displayName: "ESP32", vendorId: "10c4", productId: "ea60" },
@@ -35,6 +39,31 @@ assert.deepEqual(selectableSerialPorts(
   "linux"
 ), []);
 
+const windowCalls = [];
+const fakeWindow = {
+  maximized: false,
+  isMaximized() { return this.maximized; },
+  minimize() { windowCalls.push("minimize"); },
+  maximize() { this.maximized = true; windowCalls.push("maximize"); },
+  unmaximize() { this.maximized = false; windowCalls.push("unmaximize"); },
+  close() { windowCalls.push("close"); }
+};
+assert.deepEqual(windowChromeState(fakeWindow, "linux"), {
+  customTitleBar: true,
+  maximized: false
+});
+assert.deepEqual(windowChromeState(fakeWindow, "darwin"), {
+  customTitleBar: false,
+  maximized: false
+});
+performWindowAction(fakeWindow, "minimize", "linux");
+assert.equal(performWindowAction(fakeWindow, "toggle-maximize", "linux").maximized, true);
+assert.equal(performWindowAction(fakeWindow, "toggle-maximize", "linux").maximized, false);
+performWindowAction(fakeWindow, "close", "linux");
+assert.deepEqual(windowCalls, ["minimize", "maximize", "unmaximize", "close"]);
+assert.throws(() => performWindowAction(fakeWindow, "close", "darwin"), /Unsupported/);
+assert.throws(() => performWindowAction(fakeWindow, "unknown", "linux"), /Unsupported/);
+
 const calls = [];
 const fakeApp = {
   isPackaged: true,
@@ -60,6 +89,7 @@ const mainSource = await readFile(new URL("../desktop/main.mjs", import.meta.url
 const preloadSource = await readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../web/index.html", import.meta.url), "utf8");
+const stylesSource = await readFile(new URL("../web/styles.css", import.meta.url), "utf8");
 const afterPackSource = await readFile(new URL("./after-pack.cjs", import.meta.url), "utf8");
 const macEntitlements = await readFile(new URL("../build/entitlements.mac.plist", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -69,8 +99,16 @@ assert.match(mainSource, /sandbox:\s*true/);
 assert.match(mainSource, /permission === "serial" && ownsTrustedConsole/);
 assert.match(mainSource, /selectableSerialPorts\(portList\)/);
 assert.match(mainSource, /\/dev\/ttyUSB\*/);
+assert.match(mainSource, /frame:\s*!usesCustomTitleBar/);
+assert.match(mainSource, /Menu\.setApplicationMenu\(null\)/);
 assert.match(mainSource, /Connecting synchronizes settings and telemetry only\. It does not arm or start the motor\./);
 assert.doesNotMatch(preloadSource, /require\(["'](?:node:)?(?:fs|child_process|path|os)/);
+assert.match(preloadSource, /performWindowAction:\s*action => ipcRenderer\.invoke\("desktop:window-action", action\)/);
+assert.match(indexSource, /id="windowTitleBar"[^>]*hidden/);
+assert.match(indexSource, /data-window-action="minimize"[\s\S]*data-window-action="toggle-maximize"[\s\S]*data-window-action="close"/);
+assert.match(stylesSource, /\.window-titlebar\s*\{[\s\S]*height:\s*44px[\s\S]*-webkit-app-region:\s*drag/);
+assert.match(stylesSource, /\.window-controls\s*\{[\s\S]*-webkit-app-region:\s*no-drag/);
+assert.match(stylesSource, /\.window-controls button\s*\{[\s\S]*width:\s*48px[\s\S]*min-height:\s*44px/);
 assert.match(indexSource, /id="launchAtLogin"[^>]*type="checkbox"/);
 assert.match(appSource, /initializeDesktopIntegration[\s\S]*getLaunchAtLogin\(\)[\s\S]*setLaunchAtLogin\(requested\)/);
 assert.match(appSource, /Opens the console only; the motor remains disarmed\./);

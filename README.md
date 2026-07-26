@@ -208,6 +208,8 @@ npm run dist:linux
 sudo usermod -aG dialout "$USER"
 ```
 
+Linux desktop app ใช้ frameless window โดยซ่อน native title bar และ menu bar พร้อมแถบควบคุมในแอปสำหรับลากหน้าต่าง ย่อ ขยาย/คืนขนาด และปิดหน้าต่าง ส่วน macOS, Windows และ web browser ยังคงใช้ window chrome เดิม
+
 ผลลัพธ์อยู่ใน `dist/` การแจกจ่าย macOS ให้เครื่องอื่นควรตั้งค่า Apple Developer ID signing และ notarization ส่วน Windows production release ควรใช้ Windows code-signing certificate ก่อนสร้าง release
 
 เมื่อ environment ไม่มี Developer ID ขั้นตอน `afterPack` จะลงลายเซ็นแบบ ad-hoc ให้ Electron bundle ตามลำดับ leaf-to-root และตรวจด้วย `codesign --verify --deep --strict` ก่อนสร้าง DMG/ZIP ลายเซ็นนี้รักษาความสมบูรณ์ของ bundle แต่ไม่แทน Apple notarization ผู้ใช้ preview build อาจยังต้องคลิกขวาแล้วเลือก **Open** หรือรัน `xattr -cr "/Applications/Mocking Machine.app"` ห้ามซ่อม Electron bundle ด้วย `codesign --deep` โดยตรง เพราะอาจทิ้ง nested frameworks ไว้ในสถานะลงลายเซ็นเพียงบางส่วน

@@ -9,6 +9,22 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div id="windowTitleBar" class="window-titlebar" hidden>
+    <div class="window-title">Mocking Machine</div>
+    <div class="window-controls" role="group" aria-label="Window controls">
+      <button type="button" data-window-action="minimize" aria-label="Minimize window" title="Minimize">
+        <span aria-hidden="true">−</span>
+      </button>
+      <button id="windowMaximizeButton" type="button" data-window-action="toggle-maximize"
+              aria-label="Maximize window" title="Maximize">
+        <span aria-hidden="true">□</span>
+      </button>
+      <button class="window-close" type="button" data-window-action="close"
+              aria-label="Close window" title="Close">
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+  </div>
   <header class="topbar">
     <div>
       <div class="eyebrow">ROTATING MACHINERY TEST RIG</div>

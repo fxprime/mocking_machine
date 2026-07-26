@@ -165,6 +165,47 @@ async function initializeDesktopIntegration() {
   });
 }
 
+async function initializeWindowChrome() {
+  const desktop = globalThis.mockingMachineDesktop;
+  if (!desktop?.getWindowChrome) return;
+
+  const titleBar = $("windowTitleBar");
+  const maximizeButton = $("windowMaximizeButton");
+  const renderMaximized = maximized => {
+    maximizeButton.setAttribute(
+      "aria-label",
+      maximized ? "Restore window" : "Maximize window"
+    );
+    maximizeButton.title = maximized ? "Restore" : "Maximize";
+    maximizeButton.querySelector("span").textContent = maximized ? "❐" : "□";
+  };
+
+  try {
+    const state = await desktop.getWindowChrome();
+    if (!state.customTitleBar) return;
+    titleBar.hidden = false;
+    renderMaximized(state.maximized);
+    desktop.onWindowMaximized?.(renderMaximized);
+    titleBar.addEventListener("click", async event => {
+      const button = event.target.closest("[data-window-action]");
+      if (!button) return;
+      const action = button.dataset.windowAction;
+      if (action === "close") {
+        desktop.performWindowAction(action).catch(() => {});
+        return;
+      }
+      try {
+        const nextState = await desktop.performWindowAction(action);
+        renderMaximized(nextState.maximized);
+      } catch (error) {
+        console.error(`Could not perform window action: ${action}`, error);
+      }
+    });
+  } catch (error) {
+    console.error("Could not initialize Linux window controls.", error);
+  }
+}
+
 function crc16(bytes) {
   let crc = 0xffff;
   for (const value of bytes) {
@@ -2877,6 +2918,7 @@ $("baud").addEventListener("change", () => {
   writeBaudPreference(localPreferenceStorage(), $("baud").value);
 });
 initializeDesktopIntegration();
+initializeWindowChrome();
 $("stopButton").addEventListener("click", () => stopAllManualOutputs(true));
 $("machineStateControl").addEventListener("click", toggleMachineOutput);
 $("runButton").addEventListener("click", () => {

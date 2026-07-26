@@ -7,6 +7,7 @@ import {
   selectedSerialPortId,
   serialPortLabel
 } from "./serial-port.mjs";
+import { performWindowAction, windowChromeState } from "./window-chrome.mjs";
 
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const consolePath = path.join(desktopDirectory, "..", "web", "index.html");
@@ -64,6 +65,11 @@ function configureSerialAccess() {
 }
 
 function installApplicationMenu() {
+  if (process.platform === "linux") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+
   const template = [
     {
       label: app.name,
@@ -87,6 +93,7 @@ function installApplicationMenu() {
 }
 
 function createWindow() {
+  const usesCustomTitleBar = process.platform === "linux";
   mainWindow = new BrowserWindow({
     title: "Mocking Machine",
     width: 1440,
@@ -94,6 +101,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 650,
     backgroundColor: "#030817",
+    frame: !usesCustomTitleBar,
+    autoHideMenuBar: usesCustomTitleBar,
     show: false,
     webPreferences: {
       preload: path.join(desktopDirectory, "preload.cjs"),
@@ -113,6 +122,16 @@ function createWindow() {
     if (url.split(/[?#]/, 1)[0] !== consoleUrl) event.preventDefault();
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  const sendMaximizedState = () => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow.webContents.send(
+        "desktop:window-maximized",
+        mainWindow.isMaximized()
+      );
+    }
+  };
+  mainWindow.on("maximize", sendMaximizedState);
+  mainWindow.on("unmaximize", sendMaximizedState);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
   });
@@ -122,6 +141,14 @@ function createWindow() {
 ipcMain.handle("desktop:get-launch-at-login", () => getLaunchAtLoginState(app));
 ipcMain.handle("desktop:set-launch-at-login", (_event, enabled) =>
   setLaunchAtLoginState(app, enabled));
+ipcMain.handle("desktop:get-window-chrome", event => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  return windowChromeState(mainWindow);
+});
+ipcMain.handle("desktop:window-action", (event, action) => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  return performWindowAction(mainWindow, action);
+});
 
 app.whenReady().then(() => {
   configureSerialAccess();

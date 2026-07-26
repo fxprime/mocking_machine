@@ -43,6 +43,38 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .primary { background: var(--interactive-strong); border-color: var(--interactive); color: #00151b; }
 .danger { background: #9f2631; border-color: var(--danger); color: white; }
 .warning { border-color: var(--warning); color: var(--warning); }
+.window-titlebar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--outline);
+  background: rgba(3, 8, 23, .96);
+  color: var(--on-muted);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.window-titlebar[hidden] { display: none; }
+.window-title { padding-left: 1rem; font-size: .85rem; font-weight: 500; }
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+.window-controls button {
+  width: 48px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--on-surface);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.window-controls button:hover { background: var(--surface-soft); }
+.window-controls .window-close:hover,
+.window-controls .window-close:focus-visible { background: #c42b1c; color: white; }
 .topbar { min-height: 86px; display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding: 1rem 2rem; border-bottom: 1px solid var(--outline); background: rgba(5, 14, 34, .88); backdrop-filter: blur(12px); }
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-size: 1.42rem; line-height: 1.2; font-weight: 600; }
