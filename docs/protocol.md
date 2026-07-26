@@ -794,7 +794,7 @@ adapter for Node.js serial libraries.
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 24.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 26.
 
 | Settings schema | Change |
 |---:|---|
@@ -812,8 +812,10 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 22 | Added direction-aware Hall edges, reversible reference-side corrections, and guarded bidirectional hysteresis calibration |
 | 23 | Replaced fixed-duty Hall calibration motion with configurable bidirectional closed-loop RPM control |
 | 24 | Added a persistent jerk-limit enable switch; disabling it preserves velocity and acceleration limits |
+| 25 | Added persistent one-pixel WS2812 status LED hardware and indication timing settings |
+| 26 | Added a configurable WS2812 pixel count, defaulting to a four-pixel rectangular module |
 
-The current loader explicitly migrates valid schema 4–23 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Schema 23 migrates with jerk limiting enabled. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-24 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–25 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Schema 23 migrates with jerk limiting enabled. Schemas 23–24 receive the default status LED configuration, and schema 25 receives the default four-pixel count. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-26 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.

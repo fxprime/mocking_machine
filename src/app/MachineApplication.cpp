@@ -456,6 +456,10 @@ void MachineApplication::begin() {
     faults_ |= FaultInvalidConfiguration;
     state_ = RunState::Fault;
   }
+  if (!status_led_.begin(settings_.status_led)) {
+    faults_ |= FaultInvalidConfiguration;
+    state_ = RunState::Fault;
+  }
   configureVelocityController();
   velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
                                 settings_.motor_model, settings_.velocity_estimator_method,
@@ -545,6 +549,19 @@ void MachineApplication::runOnce() {
     zero_index_calibration_status_pending_ =
         !sendZeroIndexHysteresisCalibrationStatus(transmit_sequence_++);
   }
+  RunState status_state = state_;
+  if (faults_ == FaultNone &&
+      (characterization_stage_ != CharacterizationStage::Idle ||
+       (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
+        zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
+       (state_ == RunState::Armed && manual_command_expiry_us_ > now))) {
+    status_state = RunState::Running;
+  }
+  float status_motion = telemetry_.desired_velocity_rad_s;
+  if (status_motion == 0.0F) {
+    status_motion = motor_.appliedDuty();
+  }
+  status_led_.update(now, status_state, faults_, status_motion);
   serial_link_.serviceTx();
 }
 
@@ -1307,6 +1324,10 @@ void MachineApplication::lineThunk(void* const context, const char* const line) 
 void MachineApplication::handleFrame(const protocol::FrameView& frame) {
   using protocol::MessageId;
   using protocol::ResultCode;
+  if (state_ == RunState::Disarmed) {
+    status_led_.notifyCommandReceived(
+        static_cast<uint64_t>(esp_timer_get_time()));
+  }
   switch (frame.message_id) {
     case MessageId::GetSettings:
       sendSettings(frame.sequence);

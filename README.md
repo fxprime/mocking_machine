@@ -9,6 +9,10 @@
 
 ## ภาพรวมระบบ
 
+![แท่นทดสอบ Mocking Machine และกล่องควบคุม](docs/images/test-rig-overview.webp)
+
+*แท่นทดสอบจริงพร้อมมอเตอร์ โรเตอร์ เซนเซอร์ สายเชื่อมต่อ และกล่องควบคุมที่มีปุ่มหยุดฉุกเฉิน*
+
 ```mermaid
 flowchart TB
     GUI["Chrome / Edge<br/>Web Serial GUI"]
@@ -34,7 +38,7 @@ flowchart TB
 
 | รายการ | ค่าในเฟิร์มแวร์ปัจจุบัน |
 |---|---|
-| Wire protocol / settings schema | Version 1 / schema 24 |
+| Wire protocol / settings schema | Version 1 / schema 26 |
 | Control loop | ค่าเริ่มต้น 2,000 µs หรือ 500 Hz |
 | UART / telemetry | ค่าเริ่มต้น 115200 bit/s / 50 Hz |
 | Encoder CPR | ค่าเริ่มต้น 184 counts/rev เป็น placeholder; ต้องสอบเทียบกับเครื่องจริง |
@@ -89,9 +93,19 @@ GUI ไม่ต้องติดตั้ง dependency เพิ่ม ใช
 เพื่อเชื่อมต่อผ่าน Web Serial, Electron หรือ Node.js ได้โดยไม่ต้องเขียน frame parser, CRC,
 payload decoder และ ACK correlation ซ้ำเอง
 
-![หน้าจอ Overview ของ Mocking Machine](image_gui.png)
+![หน้าจอ Overview ของ Mocking Machine](docs/images/gui-overview.png)
 
-![หน้าต่างแก้ไข velocity profile](image_velocityprofile.png)
+### ตัวอย่างประสิทธิภาพการติดตามความเร็ว
+
+![ผลการติดตามความเร็วของลำดับ random step](docs/images/velocity-tracking-performance.webp)
+
+*เส้นสีเหลืองคือความเร็วที่สั่ง และเส้นสีฟ้าคือความเร็วที่วัดได้จากลำดับ random step
+ตัวอย่างนี้แสดงการติดตามระดับความเร็วหลายช่วง โดยมีความล่าช้าและความคลาดเคลื่อนช่วงเปลี่ยน
+ระดับให้ตรวจสอบได้โดยตรงจากกราฟ*
+
+### ตัวแก้ไขโปรไฟล์ความเร็ว
+
+![หน้าต่างแก้ไข velocity profile](docs/images/gui-velocity-profile-editor.png)
 
 <!-- ภาพที่ควรเพิ่มภายหลัง: PID tuning, calibration และ motor characterization result -->
 

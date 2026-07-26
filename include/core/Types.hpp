@@ -166,6 +166,27 @@ struct CharacterizationConfiguration {
   float recommendation_safety_factor = 0.70F;
 };
 
+struct StatusLedConfiguration {
+  static constexpr uint8_t kMaximumRmtChannel = 7U;
+  static constexpr uint8_t kMaximumPixelCount = 16U;
+  static constexpr uint16_t kBootOrderTestDurationMs = 5000U;
+  static constexpr uint16_t kRunningAnimationStepMs = 120U;
+
+  uint8_t data_pin = 2U;
+  uint8_t rmt_channel = 0U;
+  uint8_t rmt_clock_divider = 2U;
+  uint8_t brightness = 24U;
+  uint16_t zero_high_ticks = 16U;
+  uint16_t zero_low_ticks = 34U;
+  uint16_t one_high_ticks = 32U;
+  uint16_t one_low_ticks = 18U;
+  uint16_t command_blink_on_ms = 60U;
+  uint16_t command_blink_off_ms = 60U;
+  uint16_t fault_blink_interval_ms = 250U;
+  bool enabled = true;
+  uint8_t pixel_count = 4U;
+};
+
 struct CharacterizationDynamicsResult {
   float acceleration_forward_rad_s2 = 0.0F;
   float acceleration_reverse_rad_s2 = 0.0F;
@@ -209,7 +230,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 24;
+  static constexpr uint32_t kSchemaVersion = 26;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};
@@ -228,6 +249,7 @@ struct MachineSettings {
   MotorModelConfiguration motor_model{};
   VelocityEstimatorMethod velocity_estimator_method = VelocityEstimatorMethod::LowPass;
   uint32_t velocity_acceleration_window_samples = 5U;
+  StatusLedConfiguration status_led{};
 };
 
 struct TelemetrySample {

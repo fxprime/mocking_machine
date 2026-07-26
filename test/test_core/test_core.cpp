@@ -13,6 +13,7 @@
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
 #include "control/RotorPosition.hpp"
+#include "control/StatusLedPattern.hpp"
 #include "control/ZeroIndexCalibration.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "profile/VelocityProfile.hpp"
@@ -26,6 +27,97 @@ using namespace mm;
 void test_crc_standard_vector() {
   constexpr std::array<uint8_t, 9> data{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
   TEST_ASSERT_EQUAL_HEX16(0x29B1, protocol::crc16CcittFalse(data.data(), data.size()));
+}
+
+void test_status_led_maps_machine_states_to_distinct_colors() {
+  StatusLedPattern pattern;
+  const StatusLedConfiguration configuration{};
+  const uint8_t level = configuration.brightness;
+
+  TEST_ASSERT_TRUE(
+      (pattern.color(0U, RunState::Disarmed, FaultNone, configuration) ==
+       StatusLedColor{0U, level, 0U}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(0U, RunState::Armed, FaultNone, configuration) ==
+       StatusLedColor{level, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(0U, RunState::Running, FaultNone, configuration) ==
+       StatusLedColor{level, 0U, 0U}));
+}
+
+void test_status_led_boot_pattern_identifies_pixel_order() {
+  constexpr uint8_t level = 24U;
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::bootOrderColor(0U, level) ==
+       StatusLedColor{level, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::bootOrderColor(1U, level) ==
+       StatusLedColor{0U, 0U, level}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::bootOrderColor(2U, level) ==
+       StatusLedColor{level, level, level}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::bootOrderColor(3U, level) == StatusLedColor{}));
+  TEST_ASSERT_EQUAL_UINT16(
+      5000U, StatusLedConfiguration::kBootOrderTestDurationMs);
+}
+
+void test_status_led_command_overlay_blinks_twice_then_restores_state() {
+  StatusLedPattern pattern;
+  const StatusLedConfiguration configuration{};
+  const uint8_t level = configuration.brightness;
+  pattern.notifyCommandReceived(1000000ULL);
+
+  TEST_ASSERT_TRUE(
+      (pattern.color(1000000ULL, RunState::Disarmed, FaultNone, configuration) ==
+       StatusLedColor{level, level, level}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(1060000ULL, RunState::Disarmed, FaultNone, configuration) ==
+       StatusLedColor{}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(1120000ULL, RunState::Disarmed, FaultNone, configuration) ==
+       StatusLedColor{level, level, level}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(1180000ULL, RunState::Disarmed, FaultNone, configuration) ==
+       StatusLedColor{0U, level, 0U}));
+}
+
+void test_status_led_command_overlay_is_suppressed_while_armed() {
+  StatusLedPattern pattern;
+  const StatusLedConfiguration configuration{};
+  pattern.notifyCommandReceived(0U);
+  TEST_ASSERT_TRUE(
+      (pattern.color(0U, RunState::Armed, FaultNone, configuration) ==
+       StatusLedColor{configuration.brightness, 0U, 0U}));
+}
+
+void test_status_led_running_trail_reverses_with_motor_direction() {
+  constexpr uint8_t level = 24U;
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::runningColor(0U, 1U, 1, level) ==
+       StatusLedColor{level / 2U, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::runningColor(1U, 1U, 1, level) ==
+       StatusLedColor{level, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::runningColor(3U, 1U, -1, level) ==
+       StatusLedColor{level, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (StatusLedPattern::runningColor(0U, 1U, -1, level) ==
+       StatusLedColor{level / 2U, 0U, 0U}));
+}
+
+void test_status_led_fault_overrides_command_blink() {
+  StatusLedPattern pattern;
+  const StatusLedConfiguration configuration{};
+  pattern.notifyCommandReceived(0U);
+
+  TEST_ASSERT_TRUE(
+      (pattern.color(0U, RunState::Fault, FaultOverCurrent, configuration) ==
+       StatusLedColor{configuration.brightness, 0U, 0U}));
+  TEST_ASSERT_TRUE(
+      (pattern.color(250000ULL, RunState::Fault, FaultOverCurrent,
+                     configuration) == StatusLedColor{}));
 }
 
 void test_characterization_dynamics_estimates_constant_acceleration() {
@@ -258,7 +350,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(24U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(26U, MachineSettings::kSchemaVersion);
 }
 
 void test_bearing_configuration_frame_crc_vector() {
@@ -860,7 +952,10 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_TRUE(settings.safety.jerk_limit_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(24U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(26U, settings.schema_version);
+  TEST_ASSERT_TRUE(settings.status_led.enabled);
+  TEST_ASSERT_EQUAL_UINT8(2U, settings.status_led.data_pin);
+  TEST_ASSERT_EQUAL_UINT8(4U, settings.status_led.pixel_count);
   TEST_ASSERT_FALSE(settings.load_setting.broken_bearing);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(VelocityEstimatorMethod::LowPass),
                           static_cast<uint8_t>(settings.velocity_estimator_method));
@@ -1019,6 +1114,12 @@ void test_characterization_dynamics_only_lowers_selected_limits() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
+  RUN_TEST(test_status_led_maps_machine_states_to_distinct_colors);
+  RUN_TEST(test_status_led_boot_pattern_identifies_pixel_order);
+  RUN_TEST(test_status_led_command_overlay_blinks_twice_then_restores_state);
+  RUN_TEST(test_status_led_command_overlay_is_suppressed_while_armed);
+  RUN_TEST(test_status_led_running_trail_reverses_with_motor_direction);
+  RUN_TEST(test_status_led_fault_overrides_command_blink);
   RUN_TEST(test_characterization_dynamics_estimates_constant_acceleration);
   RUN_TEST(test_characterization_dynamics_uses_robust_quantile);
   RUN_TEST(test_breakaway_trials_retain_highest_duty);

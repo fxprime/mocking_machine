@@ -17,6 +17,7 @@
 #include "core/Types.hpp"
 #include "drivers/QuadratureEncoder.hpp"
 #include "drivers/Vnh2sp30MotorDriver.hpp"
+#include "drivers/Ws2812StatusLed.hpp"
 #include "drivers/ZeroIndexSensor.hpp"
 #include "profile/VelocityProfile.hpp"
 #include "profile/VelocityStepSequence.hpp"
@@ -100,6 +101,7 @@ class MachineApplication final {
   QuadratureEncoder encoder_{};
   ZeroIndexSensor zero_index_{};
   Vnh2sp30MotorDriver motor_{};
+  Ws2812StatusLed status_led_{};
   VelocityEstimator velocity_estimator_{};
   IncrementalVelocityController controller_{};
   MotionLimiter motion_limiter_{};

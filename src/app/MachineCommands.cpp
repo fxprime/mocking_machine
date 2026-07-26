@@ -80,6 +80,10 @@ void MachineApplication::handleLine(const char* const line) {
   if (count == 0) {
     return;
   }
+  if (state_ == RunState::Disarmed) {
+    status_led_.notifyCommandReceived(
+        static_cast<uint64_t>(esp_timer_get_time()));
+  }
   for (const auto& command : kCommands) {
     if (std::strcmp(arguments[0], command.name) == 0) {
       (this->*command.handler)(count, arguments);
@@ -250,6 +254,15 @@ void MachineApplication::commandConfig(const int argc, char* argv[]) {
                   settings_.safety.min_supply_voltage_v,
                   settings_.safety.max_supply_voltage_v,
                   settings_.supply_voltage.divider_gain);
+    Serial.printf("status_led=%s pixels=%u pin=%u rmt=%u brightness=%u command=%u/%ums fault=%ums\r\n",
+                  settings_.status_led.enabled ? "on" : "off",
+                  settings_.status_led.pixel_count,
+                  settings_.status_led.data_pin,
+                  settings_.status_led.rmt_channel,
+                  settings_.status_led.brightness,
+                  settings_.status_led.command_blink_on_ms,
+                  settings_.status_led.command_blink_off_ms,
+                  settings_.status_led.fault_blink_interval_ms);
   } else if (std::strcmp(argv[1], "save") == 0) {
     if (state_ != RunState::Disarmed) {
       Serial.println("ERR stop and disarm before saving configuration");

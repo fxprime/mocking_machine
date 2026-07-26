@@ -13,8 +13,60 @@
 | Current sense | 34 | CS | ADC1 input-only, external divider/filter required |
 | Driver diagnostic | 35 | EN/DIAG | Optional and disabled by default; external 5 V-to-3.3 V protection required when enabled |
 | Driver VIN sense | 36 | Motor supply V+ through divider | ADC1 input-only; 6.8 kΩ / 1 kΩ divider |
+| Status LEDs | 2 | WS2812 DIN | Four chained RGB pixels; RMT channel 0, 24/255 brightness by default |
 
 All pins live in `MachineSettings`, but the current serial parameter API does not expose pin changes. Changing this map requires a firmware-default change (or a compatible persisted-settings migration) and rebuild.
+
+![Control enclosure overview](images/control-enclosure-overview.webp)
+
+*As-built control enclosure showing the power supply, DC converters, motor driver, ESP32 carrier,
+signal-conditioning board, terminal blocks, harness connectors, emergency-stop wiring, and status
+LED module. Treat this photograph as an assembly reference; the tables and schematics in this
+document remain authoritative.*
+
+## Four-pixel WS2812 status module
+
+Connect GPIO2 to the rectangular module's `DIN` through a 220–470 Ω series resistor. Connect
+the module ground to the ESP32 ground and place a 100 nF bypass capacitor near each pixel
+(or use the capacitors already fitted to the module). When the module is powered from 5 V,
+use a 74AHCT125 or another 3.3 V-to-5 V logic buffer for reliable data-level margin. All four
+internally daisy-chained pixels display the same indication; only `DIN`, not `DOUT`, connects
+to the ESP32.
+
+| Indication | Meaning |
+|---|---|
+| First 5 seconds: 1 red, 2 blue, 3 white, 4 off | Startup pixel-order check |
+| Solid green | Disarmed; motor output is inhibited |
+| Solid red | Armed; motor output is permitted |
+| Rotating red head and trail | Motor active; clockwise through the chain for forward and counterclockwise for backward |
+| Two short white blinks | A CRC-valid binary frame or non-empty terminal command was received while disarmed |
+| Blinking red | A fault is latched; this overrides the command indication |
+
+The confirmed physical order of the rectangular module is:
+
+| Position | Left | Right |
+|---|---|---|
+| Top | Pixel 4 (off during startup) | Pixel 1 (red during startup) |
+| Bottom | Pixel 3 (white during startup) | Pixel 2 (blue during startup) |
+
+![Annotated status LED, power, and sensor wiring](images/control-enclosure-wiring-annotated.webp)
+
+*Annotated close-up of the installed four-pixel WS2812 order and the adjacent 24 V/12 V input,
+protected 5 V output, current-sense, and driver-VIN-sense connections.*
+
+Pixels 1 → 2 → 3 → 4 therefore travel clockwise around the rectangle. Forward motor motion
+advances the red animation in that order; reverse motion advances it in the opposite order.
+
+The startup order pattern is held for five seconds after LED initialization, then all four
+pixels switch to the normal status. Command indication is accepted only when the command
+arrives while disarmed; it temporarily overlays green and then restores it. Fault red always
+has priority after the startup check. Firmware uses the ESP32 RMT peripheral asynchronously,
+and LED transmission is serviced outside the 500 Hz control tick.
+
+GPIO2 is a boot-strapping pin. Do not add an external pull-up or pull-down that changes its
+required reset level. If the selected board already uses GPIO2, change
+`MachineSettings::status_led.data_pin` before flashing. The default pixel count is four and
+can be changed with `MachineSettings::status_led.pixel_count` for a different chained module.
 
 The zero-index input captures rising and falling edge timestamps and quadrature counts. Runtime
 selection pairs CW rising with CCW falling, or CW falling with CCW rising, so both directions
