@@ -16,7 +16,7 @@ import {
 } from "./serial-port.mjs";
 import { performWindowAction, windowChromeState } from "./window-chrome.mjs";
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = electronMain;
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } = electronMain;
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const consolePath = path.join(desktopDirectory, "..", "web", "index.html");
 const consoleUrl = pathToFileURL(consolePath).href;
@@ -217,6 +217,10 @@ ipcMain.handle("desktop:window-action", (event, action) => {
 ipcMain.handle("desktop:get-api-configuration", event => {
   if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
   return { configuration: apiConfiguration, state: desktopApi.state };
+});
+ipcMain.handle("desktop:copy-api-token", event => {
+  if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");
+  clipboard.writeText(apiConfiguration.token);
 });
 ipcMain.handle("desktop:set-api-configuration", async (event, value) => {
   if (!ownsTrustedConsole(event.sender)) throw new Error("Untrusted window.");

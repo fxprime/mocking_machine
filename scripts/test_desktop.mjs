@@ -183,6 +183,12 @@ assert.match(mainSource, /Connecting synchronizes settings and telemetry only\. 
 assert.doesNotMatch(preloadSource, /require\(["'](?:node:)?(?:fs|child_process|path|os)/);
 assert.match(preloadSource, /performWindowAction:\s*action => ipcRenderer\.invoke\("desktop:window-action", action\)/);
 assert.match(preloadSource, /getApiConfiguration:\s*\(\) => ipcRenderer\.invoke\("desktop:get-api-configuration"\)/);
+assert.match(preloadSource, /copyApiToken:\s*\(\) => ipcRenderer\.invoke\("desktop:copy-api-token"\)/,
+  "The sandboxed renderer must use the desktop clipboard bridge");
+assert.match(mainSource, /ipcMain\.handle\("desktop:copy-api-token"[\s\S]*clipboard\.writeText\(apiConfiguration\.token\)/,
+  "Only the trusted console may copy the configured API token");
+assert.match(appSource, /desktop\.copyApiToken[\s\S]*navigator\.clipboard\.writeText/,
+  "The copy button must prefer Electron's clipboard and retain a browser fallback");
 assert.match(preloadSource, /publishApiSnapshot:\s*snapshot => ipcRenderer\.send\("desktop:api-snapshot", snapshot\)/);
 assert.match(indexSource, /id="windowTitleBar"[^>]*hidden/);
 assert.match(indexSource, /data-window-action="minimize"[\s\S]*data-window-action="toggle-maximize"[\s\S]*data-window-action="close"/);

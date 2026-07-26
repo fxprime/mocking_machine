@@ -249,7 +249,11 @@ async function initializeDesktopApiIntegration(desktop) {
   });
   $("copyDesktopApiToken").addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText($("desktopApiToken").value);
+      if (desktop.copyApiToken) {
+        await desktop.copyApiToken();
+      } else {
+        await navigator.clipboard.writeText($("desktopApiToken").value);
+      }
       toast("Desktop API token copied.");
     } catch (error) {
       $("desktopApiToken").type = "text";
