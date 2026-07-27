@@ -38,7 +38,7 @@ flowchart TB
 
 | รายการ | ค่าในเฟิร์มแวร์ปัจจุบัน |
 |---|---|
-| Wire protocol / settings schema | Version 1 / schema 26 |
+| Wire protocol / settings schema | Version 1 / schema 28 |
 | Control loop | ค่าเริ่มต้น 2,000 µs หรือ 500 Hz |
 | UART / telemetry | ค่าเริ่มต้น 115200 bit/s / 50 Hz |
 | Encoder CPR | ค่าเริ่มต้น 184 counts/rev เป็น placeholder; ต้องสอบเทียบกับเครื่องจริง |
@@ -61,6 +61,7 @@ flowchart TB
 ## ความสามารถหลัก
 
 - ควบคุมความเร็วด้วย incremental PID ที่คำนวณตามเวลาจริง พร้อม anti-windup
+- ลากตัวชี้ตำแหน่งโรเตอร์หลัง arm เพื่อสั่งตำแหน่งด้วย cascaded position PID → velocity PID
 - จำกัดความเร็ว ความเร่ง และ jerk ก่อนส่ง setpoint เข้าตัวควบคุม
 - สร้างโปรไฟล์แบบ ramp, sine ทิศทางเดียว และ waypoint สูงสุด 16 จุด
 - แก้ไขและทดลองโปรไฟล์จากกราฟ โดยตรวจข้อจำกัดของเครื่องก่อนสั่งรัน
@@ -120,7 +121,7 @@ flowchart TB
     TICK["Fixed-deadline control tick<br/>500 Hz"]
     ENCODER["Encoder + velocity estimator"]
     SAFETY["Current / VIN / diagnostic<br/>safety checks"]
-    PROFILE["Velocity profile + motion limiter"]
+    PROFILE["Velocity profile or position PID<br/>+ motion limiter"]
     CONTROL["Incremental velocity controller"]
     OUTPUT["VNH2SP30 motor output"]
     HEARTBEAT["Heartbeat<br/>1 Hz"]

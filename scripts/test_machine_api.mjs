@@ -49,9 +49,9 @@ function frameFields(bytes) {
 }
 
 function settingsPayload() {
-  const payload = new Uint8Array(204);
+  const payload = new Uint8Array(240);
   const view = new DataView(payload.buffer);
-  view.setUint32(0, 24, true);
+  view.setUint32(0, 28, true);
   view.setUint32(4, 115200, true);
   view.setUint32(8, 2000, true);
   view.setUint32(12, 184, true);
@@ -61,6 +61,15 @@ function settingsPayload() {
   view.setInt8(62, -1);
   view.setUint8(90, 1);
   view.setUint8(203, 1);
+  view.setFloat32(204, 5, true);
+  view.setFloat32(208, 0, true);
+  view.setFloat32(212, 0.15, true);
+  view.setFloat32(216, 20, true);
+  view.setFloat32(220, 1, true);
+  view.setFloat32(224, 0.5, true);
+  view.setUint32(228, 250, true);
+  view.setFloat32(232, 1.25, true);
+  view.setFloat32(236, 1.5, true);
   return payload;
 }
 
@@ -169,7 +178,8 @@ assert.equal(
       target.emit("data", encodeFrame(MessageId.CURRENT_CALIBRATION_STATUS, status, {
         sequence: request.sequence
       }));
-    } else if (request.messageId === MessageId.SET_PARAMETER) {
+    } else if (request.messageId === MessageId.SET_PARAMETER ||
+               request.messageId === MessageId.SET_POSITION_TARGET) {
       target.emit("data", encodeFrame(MessageId.ACK, ackPayload(request.messageId), {
         sequence: request.sequence
       }));
@@ -181,10 +191,13 @@ assert.equal(
   assert.equal(client.connected, true);
 
   const settings = await client.getSettings();
-  assert.equal(settings.schemaVersion, 24);
+  assert.equal(settings.schemaVersion, 28);
   assert.equal(settings.baud, 115200);
   assert.equal(settings.motorDirection, -1);
   assert.equal(settings.jerkLimitEnabled, true);
+  assert.equal(settings.positionMaximumVelocityRadS, 20);
+  assert.equal(settings.positionMinimumVelocityForwardRadS, 1.25);
+  assert.equal(settings.positionMinimumVelocityReverseRadS, 1.5);
 
   const ack = await client.arm();
   assert.equal(ack.ok, true);
@@ -200,6 +213,13 @@ assert.equal(
     .find(request => request.messageId === MessageId.SET_PARAMETER);
   assert.equal(parameterRequest.payload.byteLength, 7);
   assert.equal(new DataView(parameterRequest.payload.buffer).getUint8(6), 1);
+
+  await client.setPositionTarget(270);
+  const positionRequest = transport.writes.map(frameFields)
+    .find(request => request.messageId === MessageId.SET_POSITION_TARGET);
+  assert.equal(positionRequest.payload.byteLength, 4);
+  assert.equal(new DataView(positionRequest.payload.buffer).getFloat32(0, true), 270);
+  assert.throws(() => client.setPositionTarget(360), /targetPositionDeg/);
 
   await client.disconnect();
   assert.equal(client.connected, false);

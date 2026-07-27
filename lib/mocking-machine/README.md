@@ -119,7 +119,7 @@ Machine control:
 
 - `startStream()`, `stopStream()`
 - `arm()`, `startRun()`, `stop()`, `clearFaults()`
-- `motorTest()`, `startVelocityTest()`, `startVelocitySequence()`
+- `motorTest()`, `startVelocityTest()`, `startVelocitySequence()`, `setPositionTarget()`
 
 Calibration:
 

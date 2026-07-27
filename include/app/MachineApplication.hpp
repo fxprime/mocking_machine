@@ -11,6 +11,7 @@
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
+#include "control/PositionController.hpp"
 #include "control/RotorPosition.hpp"
 #include "control/VelocityEstimator.hpp"
 #include "control/ZeroIndexCalibration.hpp"
@@ -69,6 +70,7 @@ class MachineApplication final {
   void printStatus() const;
   void updateCharacterization(uint64_t scheduled_us);
   void configureVelocityController();
+  void configurePositionController();
   void updateCurrentCalibrationCapture(float sense_voltage_v);
   void updateZeroIndexHysteresisCalibration(
       uint64_t scheduled_us, const ZeroIndexCapture& zero_capture);
@@ -104,6 +106,7 @@ class MachineApplication final {
   Ws2812StatusLed status_led_{};
   VelocityEstimator velocity_estimator_{};
   IncrementalVelocityController controller_{};
+  PositionController position_controller_{};
   MotionLimiter motion_limiter_{};
   EncoderActivityWatchdog encoder_watchdog_{};
   RotorPhaseTracker rotor_phase_tracker_{};
@@ -122,8 +125,11 @@ class MachineApplication final {
   uint64_t next_supply_voltage_sample_us_ = 0;
   uint64_t next_characterization_status_us_ = 0;
   uint64_t manual_command_expiry_us_ = 0;
+  uint64_t position_settle_started_us_ = 0;
   float manual_duty_ = 0.0F;
+  float position_target_deg_ = 0.0F;
   bool manual_raw_pwm_ = false;
+  bool position_control_active_ = false;
   bool stream_enabled_ = false;
   bool supply_voltage_initialized_ = false;
   bool motor_initialized_ = false;

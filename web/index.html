@@ -94,10 +94,15 @@
           <article class="metric rotor-position-metric">
             <span>Rotor position</span>
             <div class="rotor-readout">
-              <div id="rotorDial" class="rotor-dial unreferenced" role="img" aria-label="Waiting for the first zero-index detection">
+              <div id="rotorDial" class="rotor-dial unreferenced" role="slider" tabindex="0"
+                   aria-valuemin="0" aria-valuemax="359.9" aria-disabled="true"
+                   aria-label="Waiting for the first zero-index detection">
+                <div id="rotorTargetNeedle" class="rotor-target-needle hidden"></div>
                 <div id="rotorNeedle" class="rotor-needle"></div><div class="rotor-zero-mark">0</div>
               </div>
-              <div><strong><b id="rotorPosition">—</b>°</strong><small id="zeroIndexStatus">Waiting for zero index</small></div>
+              <div><strong><b id="rotorPosition">—</b>°</strong>
+                <small id="rotorPositionControlHint">Connect to set rotor position</small>
+                <small id="zeroIndexStatus">Waiting for zero index</small></div>
             </div>
           </article>
         </div>

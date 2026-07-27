@@ -214,6 +214,18 @@ inline bool prepareCharacterizedSettings(const MachineSettings& current,
   candidate.safety.encoder_timeout_velocity_rad_s = std::min(
       current.safety.encoder_timeout_velocity_rad_s,
       candidate.safety.max_velocity_rad_s);
+  candidate.position_control.max_velocity_rad_s =
+      std::min(current.position_control.max_velocity_rad_s,
+               candidate.safety.max_velocity_rad_s);
+  candidate.position_control.settle_velocity_rad_s =
+      std::min(current.position_control.settle_velocity_rad_s,
+               candidate.position_control.max_velocity_rad_s);
+  candidate.position_control.minimum_velocity_forward_rad_s =
+      std::min(current.position_control.minimum_velocity_forward_rad_s,
+               candidate.position_control.max_velocity_rad_s);
+  candidate.position_control.minimum_velocity_reverse_rad_s =
+      std::min(current.position_control.minimum_velocity_reverse_rad_s,
+               candidate.position_control.max_velocity_rad_s);
 
   for (uint8_t index = 0U; index < candidate.profile_count; ++index) {
     auto& profile = candidate.profiles[index];

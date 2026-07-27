@@ -285,6 +285,7 @@ literals.
 | `motorTest(signedRawDuty)` | Send bounded raw-duty test command |
 | `startVelocityTest(test)` | Start a temporary velocity step |
 | `startVelocitySequence(sequence)` | Start a bounded multi-level test |
+| `setPositionTarget(targetPositionDeg)` | Move the referenced rotor to a wrapped target while armed |
 
 The library never writes PWM pins. Firmware validates the current state, active faults, payload
 length, values, and configured safety limits before accepting these commands.

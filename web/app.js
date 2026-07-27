@@ -2,7 +2,8 @@ import { configurationPreparation, profilePreparation, resultDescription } from 
 import { calculateStepMetrics, symmetricNiceLimit } from "./response-metrics.mjs";
 import { estimateClosedLoopStepResponse } from "./step-response-estimator.mjs";
 import { createLoadConfigurationCsv, createTelemetryCsv, defaultExportBaseName, sanitizeExportBaseName } from "./csv-export.mjs";
-import { updateRotorVisualState } from "./rotor-position.mjs";
+import { normalizeDegrees, pointerAngleDegrees, updateRotorVisualState } from "./rotor-position.mjs";
+import { rotorPositionInteractionState } from "./rotor-position-interaction.mjs";
 import { calculateEncoderCalibration } from "./encoder-calibration.mjs";
 import { nextAvailableProfileId } from "./profile-collection.mjs";
 import { maximumTelemetryStreamRateHz } from "./serial-bandwidth.mjs";
@@ -20,12 +21,13 @@ import { JerkLimitedVelocityLimiter } from "./motion-limiter.mjs";
 const SYNC_1 = 0xb5;
 const SYNC_2 = 0x62;
 const VERSION = 1;
-const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, GET_BEARING_CONFIGURATION: 0x0133, BEARING_CONFIGURATION: 0x0134, SET_BEARING_CONFIGURATION: 0x0135, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, ZERO_INDEX_HYSTERESIS_CALIBRATION: 0x0305, ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS: 0x0306, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
+const MSG = { HEARTBEAT: 0x0001, ACK: 0x0002, GET_SETTINGS: 0x0100, SETTINGS: 0x0101, SET_CONTROLLER: 0x0110, SET_DRIVER_DIAGNOSTIC: 0x0111, SET_CURRENT_SENSE: 0x0112, SET_PARAMETER: 0x0113, SAVE_CONTROLLER: 0x0114, SELECT_PROFILE: 0x0120, GET_PROFILES: 0x0121, PROFILE_CONFIGURATION: 0x0122, SET_PROFILE: 0x0123, CREATE_PROFILE: 0x0124, SET_DEFAULT_PROFILE: 0x0125, GET_LOAD_CONFIGURATION: 0x0130, LOAD_CONFIGURATION: 0x0131, SET_LOAD_CONFIGURATION: 0x0132, GET_BEARING_CONFIGURATION: 0x0133, BEARING_CONFIGURATION: 0x0134, SET_BEARING_CONFIGURATION: 0x0135, START_RUN: 0x0200, STOP_RUN: 0x0201, MOTOR_TEST: 0x0202, CLEAR_FAULTS: 0x0203, ARM: 0x0204, START_VELOCITY_TEST: 0x0205, START_VELOCITY_SEQUENCE: 0x0206, SET_POSITION_TARGET: 0x0207, START_STREAM: 0x0210, STOP_STREAM: 0x0211, TELEMETRY: 0x0220, CURRENT_CALIBRATION: 0x0300, SUPPLY_VOLTAGE_CALIBRATION: 0x0301, CURRENT_CALIBRATION_STATUS: 0x0302, ROTOR_ZERO_CALIBRATION: 0x0303, ROTOR_ZERO_CALIBRATION_STATUS: 0x0304, ZERO_INDEX_HYSTERESIS_CALIBRATION: 0x0305, ZERO_INDEX_HYSTERESIS_CALIBRATION_STATUS: 0x0306, CHARACTERIZATION_RESULT: 0x0310, CHARACTERIZATION_ACTION: 0x0311, CHARACTERIZATION_STATUS: 0x0312 };
 const CURRENT_CALIBRATION_ACTION = { RESET: 0, CAPTURE_POINT_1: 1, CAPTURE_POINT_2: 2, SAVE: 3, CANCEL: 4, REQUEST_STATUS: 5 };
 const ROTOR_ZERO_CALIBRATION_ACTION = { CAPTURE: 0, SAVE: 1, CANCEL: 2, REQUEST_STATUS: 3 };
 const ZERO_INDEX_CALIBRATION_ACTION = { START: 0, SELECT_REFERENCE_SIDE: 1, SAVE: 2, CANCEL: 3, REQUEST_STATUS: 4 };
 const MAX_PROFILES = 8;
 const PROFILE_ACTION_TIMEOUT_MS = 10000;
+const POSITION_TARGET_SEND_INTERVAL_MS = 50;
 const deviceSynchronizer = new DeviceSynchronizer();
 const runRecorder = new RunRecorder();
 const communicationMetrics = new CommunicationMetrics();
@@ -72,6 +74,9 @@ let latestEncoderCount;
 let rotorVisualState;
 let latestRotorPosition = Number.NaN;
 let latestRotorReferenced = false;
+let rotorDragPointerId;
+let rotorTargetPosition = Number.NaN;
+let lastPositionTargetSentMs = 0;
 let rotorZeroCalibrationState = 0;
 let rotorZeroCalibrationCandidate = Number.NaN;
 let rotorZeroCalibrationPendingAction;
@@ -533,10 +538,26 @@ function handleMessage(id, data, messageSequence) {
       zeroIndexCalibrationReversalPauseMs: data.byteLength >= 197 ? data.getUint16(195, true) : 1000,
       zeroIndexCalibrationMaximumErrorTicks: data.byteLength >= 199 ? data.getUint16(197, true) : 2,
       zeroIndexCalibrationSpeedRpm: data.byteLength >= 203 ? data.getFloat32(199, true) : 15,
-      jerkLimitEnabled: data.byteLength >= 204 ? data.getUint8(203) !== 0 : true
+      jerkLimitEnabled: data.byteLength >= 204 ? data.getUint8(203) !== 0 : true,
+      positionKp: data.byteLength >= 208 ? data.getFloat32(204, true) : 5,
+      positionKi: data.byteLength >= 212 ? data.getFloat32(208, true) : 0,
+      positionKd: data.byteLength >= 216 ? data.getFloat32(212, true) : 0.15,
+      positionMaxVelocity: data.byteLength >= 220 ? data.getFloat32(216, true) : 20,
+      positionToleranceDeg: data.byteLength >= 224 ? data.getFloat32(220, true) : 1,
+      positionSettleVelocity: data.byteLength >= 228 ? data.getFloat32(224, true) : 0.5,
+      positionSettleTimeMs: data.byteLength >= 232 ? data.getUint32(228, true) : 250,
+      positionMinimumVelocityForward: data.byteLength >= 236 ? data.getFloat32(232, true) : 1,
+      positionMinimumVelocityReverse: data.byteLength >= 240 ? data.getFloat32(236, true) : 1
     };
     publishDesktopApiSnapshot();
     parameterDefinitions.streamRate.max = maximumTelemetryStreamRateHz(settings.baud);
+    parameterDefinitions.positionMaxVelocity.max = settings.vmax;
+    parameterDefinitions.positionSettleVelocity.max =
+        settings.positionMaxVelocity;
+    parameterDefinitions.positionMinimumVelocityForward.max =
+        settings.positionMaxVelocity;
+    parameterDefinitions.positionMinimumVelocityReverse.max =
+        settings.positionMaxVelocity;
     parameterDefinitions.rotorZeroOffsetTicks.max = Math.max(0, settings.cpr - 1);
     parameterDefinitions.zeroIndexCalibrationSpeedRpm.max =
         Math.min(120, settings.vmax / 0.10471975511965977);
@@ -1164,6 +1185,12 @@ function handleMessage(id, data, messageSequence) {
       confirmTuningRun(result);
       return;
     }
+    if (request === MSG.SET_POSITION_TARGET) {
+      if (result !== 0) {
+        toast(`Position target rejected: ${resultDescription(result)}.`);
+      }
+      return;
+    }
     toast(result === 0 ? "Command acknowledged." : `Command rejected: ${resultDescription(result)}.`);
   }
 }
@@ -1193,6 +1220,7 @@ function setConnected(value) {
   renderEncoderCalibration();
   renderRotorZeroCalibration();
   renderZeroIndexCalibration();
+  updateRotorDragAvailability();
   publishDesktopApiSnapshot();
 }
 
@@ -1272,6 +1300,65 @@ function updateState(state, faults) {
     renderRunProfileDialog();
     renderRotorLoadSetup();
   }
+  updateRotorDragAvailability();
+}
+
+function currentRotorInteractionState() {
+  return rotorPositionInteractionState({
+    connected,
+    referenced: latestRotorReferenced,
+    machineState: latestState,
+    faults: latestFaults
+  });
+}
+
+function updateRotorDragAvailability() {
+  const dial = $("rotorDial");
+  const interaction = currentRotorInteractionState();
+  dial.setAttribute("aria-disabled", String(!interaction.canDrag));
+  $("rotorPositionControlHint").textContent = interaction.hint;
+  if (!interaction.canDrag && rotorDragPointerId !== undefined) {
+    rotorDragPointerId = undefined;
+    dial.classList.remove("dragging");
+  }
+  if (!connected || !latestRotorReferenced ||
+      latestState === 2 || latestState === 3) {
+    rotorTargetPosition = Number.NaN;
+    $("rotorTargetNeedle").classList.add("hidden");
+  }
+}
+
+function showRotorTarget(targetPositionDeg) {
+  rotorTargetPosition = normalizeDegrees(targetPositionDeg);
+  $("rotorTargetNeedle").style.transform =
+      `rotate(${rotorTargetPosition}deg)`;
+  $("rotorTargetNeedle").classList.remove("hidden");
+  $("rotorDial").setAttribute("aria-valuenow",
+                              rotorTargetPosition.toFixed(1));
+}
+
+function sendRotorPositionTarget(targetPositionDeg, force = false) {
+  if (!currentRotorInteractionState().canCommand) return;
+  const now = performance.now();
+  if (!force &&
+      now - lastPositionTargetSentMs < POSITION_TARGET_SEND_INTERVAL_MS) {
+    return;
+  }
+  lastPositionTargetSentMs = now;
+  const payload = new Uint8Array(4);
+  new DataView(payload.buffer).setFloat32(
+      0, normalizeDegrees(targetPositionDeg), true);
+  sendFrame(MSG.SET_POSITION_TARGET, payload)
+      .catch(error => toast(`Position target failed: ${error.message}`));
+}
+
+function updateRotorTargetFromPointer(event, forceSend = false) {
+  const rect = $("rotorDial").getBoundingClientRect();
+  const target = pointerAngleDegrees(
+      event.clientX, event.clientY,
+      rect.left + rect.width / 2, rect.top + rect.height / 2);
+  showRotorTarget(target);
+  sendRotorPositionTarget(target, forceSend);
 }
 
 function renderMachineStateControl() {
@@ -1404,8 +1491,14 @@ function renderTelemetry(sample) {
       : undefined;
   $("rotorNeedle").style.transform = `rotate(${rotorVisualState?.unwrappedAngleDeg ?? 0}deg)`;
   $("rotorDial").classList.toggle("unreferenced", !Number.isFinite(rotorPosition));
+  if (Number.isFinite(rotorPosition) &&
+      !Number.isFinite(rotorTargetPosition)) {
+    $("rotorDial").setAttribute("aria-valuenow", rotorPosition.toFixed(1));
+  } else if (!Number.isFinite(rotorPosition)) {
+    $("rotorDial").removeAttribute("aria-valuenow");
+  }
   $("rotorDial").setAttribute("aria-label", Number.isFinite(rotorPosition)
-      ? `Rotor position ${rotorPosition.toFixed(1)} degrees; zero index ${sample.zeroSequence}; ${sample.zeroRejected} rejected bounce edges`
+      ? `Rotor position ${rotorPosition.toFixed(1)} degrees; ${latestState === 1 ? "drag to command a position; " : ""}zero index ${sample.zeroSequence}; ${sample.zeroRejected} rejected bounce edges`
       : "Waiting for the first zero-index detection");
   $("zeroIndexStatus").textContent = rotorReferenced
       ? `Accepted zero #${sample.zeroSequence} · ${sample.zeroRejected} rejected edges`
@@ -1686,6 +1779,15 @@ const parameterDefinitions = {
   zeroIndexCalibrationMaximumErrorTicks: { id: 43, decimals: 0, step: 1, min: 0, max: 1000, description: "Maximum permitted CPR interval error and edge-position jitter during calibration, in encoder ticks" },
   zeroIndexCalibrationSpeedRpm: { id: 44, decimals: 1, step: 1, min: 1, max: 120, description: "Closed-loop target speed used in both directions during automatic zero-index calibration, in RPM" },
   jerkLimitEnabled: { id: 45, decimals: 0, step: 1, min: 0, max: 1, description: "Enable jerk limiting: 1 = smooth jerk-bounded acceleration, 0 = acceleration limiting only" },
+  positionKp: { id: 46, decimals: 4, step: 0.01, min: 0, max: 100, description: "Outer position-loop proportional gain; converts angular error to velocity demand" },
+  positionKi: { id: 47, decimals: 4, step: 0.001, min: 0, max: 1000, description: "Outer position-loop integral gain" },
+  positionKd: { id: 48, decimals: 4, step: 0.001, min: 0, max: 100, description: "Outer position-loop derivative gain" },
+  positionMaxVelocity: { id: 49, decimals: 2, step: 0.1, min: 0.1, max: 10000, description: "Maximum velocity demand produced by the outer position loop, in rad/s" },
+  positionToleranceDeg: { id: 50, decimals: 2, step: 0.1, min: 0.01, max: 30, description: "Position error considered settled, in degrees" },
+  positionSettleVelocity: { id: 51, decimals: 2, step: 0.1, min: 0, max: 10000, description: "Maximum measured velocity considered settled, in rad/s" },
+  positionSettleTimeMs: { id: 52, decimals: 0, step: 10, min: 20, max: 10000, description: "Time both position and velocity must remain settled, in milliseconds" },
+  positionMinimumVelocityForward: { id: 53, decimals: 2, step: 0.1, min: 0.01, max: 10000, description: "Minimum usable forward velocity requested by position control outside the position tolerance, in rad/s" },
+  positionMinimumVelocityReverse: { id: 54, decimals: 2, step: 0.1, min: 0.01, max: 10000, description: "Minimum usable reverse velocity requested by position control outside the position tolerance, in rad/s" },
   currentPin: { decimals: 0, description: "ADC1 input used for motor current sense" },
   diagEnabled: { decimals: 0, description: "Whether the protected EN/DIAG input can trip the machine" },
   diagPin: { decimals: 0, description: "Protected active-low driver diagnostic input" },
@@ -3109,6 +3211,52 @@ $("profileEditorChart").addEventListener("keydown", event => {
   const time = point.time + (event.key === "ArrowLeft" ? -0.01 : event.key === "ArrowRight" ? 0.01 : 0);
   const velocity = point.velocity + (event.key === "ArrowDown" ? -0.1 : event.key === "ArrowUp" ? 0.1 : 0);
   setSelectedProfilePoint(time, velocity);
+});
+const rotorDial = $("rotorDial");
+rotorDial.addEventListener("pointerdown", event => {
+  if (!currentRotorInteractionState().canDrag) return;
+  event.preventDefault();
+  rotorDragPointerId = event.pointerId;
+  rotorDial.setPointerCapture(event.pointerId);
+  rotorDial.classList.add("dragging");
+  updateRotorTargetFromPointer(event, true);
+});
+rotorDial.addEventListener("pointermove", event => {
+  if (event.pointerId !== rotorDragPointerId) return;
+  updateRotorTargetFromPointer(event);
+});
+const finishRotorDrag = event => {
+  if (event.pointerId !== rotorDragPointerId) return;
+  updateRotorTargetFromPointer(event, true);
+  rotorDragPointerId = undefined;
+  rotorDial.classList.remove("dragging");
+  if (!currentRotorInteractionState().canCommand) {
+    toast("Target preview set. Arm the machine, then drag again to move the rotor.");
+  }
+};
+rotorDial.addEventListener("pointerup", finishRotorDrag);
+rotorDial.addEventListener("pointercancel", event => {
+  if (event.pointerId !== rotorDragPointerId) return;
+  rotorDragPointerId = undefined;
+  rotorDial.classList.remove("dragging");
+});
+rotorDial.addEventListener("keydown", event => {
+  if (!currentRotorInteractionState().canDrag ||
+      !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+    return;
+  }
+  event.preventDefault();
+  const startingPosition = Number.isFinite(rotorTargetPosition)
+      ? rotorTargetPosition
+      : latestRotorPosition;
+  const step = event.shiftKey ? 10 : 1;
+  const direction =
+      event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : -1;
+  showRotorTarget(startingPosition + direction * step);
+  sendRotorPositionTarget(rotorTargetPosition, true);
+  if (!currentRotorInteractionState().canCommand) {
+    toast("Target preview set. Arm the machine to command movement.");
+  }
 });
 $("connectButton").addEventListener("click", connect);
 $("baud").value = String(readBaudPreference(localPreferenceStorage()));

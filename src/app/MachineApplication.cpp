@@ -99,6 +99,15 @@ struct SettingsPayload {
   uint16_t zero_index_calibration_maximum_error_ticks;
   float zero_index_calibration_speed_rpm;
   uint8_t jerk_limit_enabled;
+  float position_kp;
+  float position_ki;
+  float position_kd;
+  float position_max_velocity_rad_s;
+  float position_tolerance_deg;
+  float position_settle_velocity_rad_s;
+  uint32_t position_settle_time_ms;
+  float position_minimum_velocity_forward_rad_s;
+  float position_minimum_velocity_reverse_rad_s;
 };
 
 struct TelemetryPayload {
@@ -132,6 +141,10 @@ struct ControllerPayload {
 struct VelocityTestPayload {
   float target_velocity_rad_s;
   uint32_t duration_ms;
+};
+
+struct PositionTargetPayload {
+  float target_position_deg;
 };
 
 struct VelocitySequencePayload {
@@ -195,6 +208,15 @@ enum class ParameterId : uint16_t {
   ZeroIndexCalibrationMaximumErrorTicks,
   ZeroIndexCalibrationSpeedRpm,
   JerkLimitEnabled,
+  PositionKp,
+  PositionKi,
+  PositionKd,
+  PositionMaximumVelocity,
+  PositionToleranceDeg,
+  PositionSettleVelocity,
+  PositionSettleTimeMs,
+  PositionMinimumVelocityForward,
+  PositionMinimumVelocityReverse,
 };
 
 struct ParameterPayload {
@@ -356,7 +378,7 @@ struct CharacterizationStatusPayload {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(SettingsPayload) == 204U, "Update protocol and browser SETTINGS decoder");
+static_assert(sizeof(SettingsPayload) == 240U, "Update protocol and browser SETTINGS decoder");
 static_assert(sizeof(CurrentCalibrationPayload) == 5U,
               "Current calibration command payload changed");
 static_assert(sizeof(CurrentCalibrationStatusPayload) == 27U,
@@ -419,6 +441,10 @@ void MachineApplication::configureVelocityController() {
   controller_.configure(configuration);
 }
 
+void MachineApplication::configurePositionController() {
+  position_controller_.configure(settings_.position_control);
+}
+
 void MachineApplication::configureZeroIndexSensor() {
   zero_index_.configureDirectionSelection(
       settings_.encoder.direction,
@@ -461,6 +487,7 @@ void MachineApplication::begin() {
     state_ = RunState::Fault;
   }
   configureVelocityController();
+  configurePositionController();
   velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
                                 settings_.motor_model, settings_.velocity_estimator_method,
                                 settings_.safety.max_acceleration_rad_s2,
@@ -488,6 +515,7 @@ void MachineApplication::runOnce() {
     const uint64_t lateness_us = now - next_control_us_;
     if (lateness_us > static_cast<uint64_t>(settings_.control.period_us) * 2ULL) {
       const bool motor_output_active = state_ == RunState::Running ||
+          position_control_active_ ||
           characterization_stage_ != CharacterizationStage::Idle ||
           (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
            zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
@@ -552,6 +580,7 @@ void MachineApplication::runOnce() {
   RunState status_state = state_;
   if (faults_ == FaultNone &&
       (characterization_stage_ != CharacterizationStage::Idle ||
+       position_control_active_ ||
        (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
         zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
        (state_ == RunState::Armed && manual_command_expiry_us_ > now))) {
@@ -631,6 +660,51 @@ void MachineApplication::controlTick(const uint64_t scheduled_us) {
     updateCharacterization(scheduled_us);
     telemetry_.desired_velocity_rad_s = 0.0F;
     telemetry_.controller_output = motor_.appliedDuty();
+  } else if (position_control_active_ && state_ == RunState::Armed &&
+             faults_ == FaultNone) {
+    const float raw_velocity_target = position_controller_.update(
+        position_target_deg_, telemetry_.rotor_position_deg, dt_s);
+    telemetry_.desired_velocity_rad_s =
+        motion_limiter_.update(raw_velocity_target, dt_s, false);
+    if (velocityControlDemandActive(telemetry_.desired_velocity_rad_s)) {
+      telemetry_.controller_output = controller_.update(
+          telemetry_.desired_velocity_rad_s,
+          telemetry_.measured_velocity_rad_s, dt_s);
+      telemetry_.controller_proportional_term =
+          controller_.proportionalTerm();
+      telemetry_.controller_integral_term = controller_.integralTerm();
+      telemetry_.controller_derivative_term =
+          controller_.derivativeTerm();
+      motor_.command(telemetry_.controller_output);
+    } else {
+      controller_.reset();
+      telemetry_.controller_output = 0.0F;
+      motor_.stop();
+    }
+    const bool settled =
+        std::fabs(position_controller_.errorDegrees()) <=
+            settings_.position_control.tolerance_deg &&
+        std::fabs(telemetry_.measured_velocity_rad_s) <=
+            settings_.position_control.settle_velocity_rad_s;
+    if (settled) {
+      if (position_settle_started_us_ == 0U) {
+        position_settle_started_us_ = scheduled_us;
+      } else if (scheduled_us - position_settle_started_us_ >=
+                 static_cast<uint64_t>(
+                     settings_.position_control.settle_time_ms) *
+                     1000ULL) {
+        position_control_active_ = false;
+        position_settle_started_us_ = 0U;
+        position_controller_.reset();
+        controller_.reset();
+        motion_limiter_.reset();
+        telemetry_.desired_velocity_rad_s = 0.0F;
+        telemetry_.controller_output = 0.0F;
+        motor_.stop();
+      }
+    } else {
+      position_settle_started_us_ = 0U;
+    }
   } else if (state_ == RunState::Running && faults_ == FaultNone) {
     const bool sequence_active = velocity_step_sequence_.active();
     const float raw_target = sequence_active
@@ -685,6 +759,7 @@ void MachineApplication::updateSafety(const uint64_t timestamp_us, const float c
       zero_index_calibration_stage_ ==
           ZeroIndexCalibrationStage::Counterclockwise;
   const bool motor_output_active = state_ == RunState::Running ||
+      position_control_active_ ||
       characterization_stage_ != CharacterizationStage::Idle ||
       (zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle &&
        zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Verify) ||
@@ -708,7 +783,8 @@ void MachineApplication::updateSafety(const uint64_t timestamp_us, const float c
   if (encoder_watchdog_.update(
           timestamp_us, telemetry_.desired_velocity_rad_s,
           encoder_.lastEdgeTimestampUs(),
-          state_ == RunState::Running || zero_index_calibration_motion,
+          state_ == RunState::Running || position_control_active_ ||
+              zero_index_calibration_motion,
           zero_index_calibration_motion
               ? zeroIndexCalibrationEncoderTimeoutMs(
                     settings_.safety.encoder_timeout_ms,
@@ -729,11 +805,14 @@ void MachineApplication::transitionToStopped() {
   profile_.stop();
   velocity_step_sequence_.stop();
   controller_.reset();
+  position_controller_.reset();
   motion_limiter_.reset();
   encoder_watchdog_.reset();
   manual_duty_ = 0.0F;
   manual_raw_pwm_ = false;
   manual_command_expiry_us_ = 0;
+  position_control_active_ = false;
+  position_settle_started_us_ = 0U;
   if (characterization_stage_ != CharacterizationStage::Idle) {
     characterization_status_pending_ = true;
   }
@@ -1648,7 +1727,23 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
         case ParameterId::Kp: candidate.control.kp = update.value; break;
         case ParameterId::Ki: candidate.control.ki = update.value; break;
         case ParameterId::Kd: candidate.control.kd = update.value; break;
-        case ParameterId::MaximumVelocity: candidate.safety.max_velocity_rad_s = update.value; break;
+        case ParameterId::MaximumVelocity:
+          candidate.safety.max_velocity_rad_s = update.value;
+          candidate.position_control.max_velocity_rad_s =
+              std::min(candidate.position_control.max_velocity_rad_s,
+                       update.value);
+          candidate.position_control.settle_velocity_rad_s =
+              std::min(candidate.position_control.settle_velocity_rad_s,
+                       candidate.position_control.max_velocity_rad_s);
+          candidate.position_control.minimum_velocity_forward_rad_s =
+              std::min(
+                  candidate.position_control.minimum_velocity_forward_rad_s,
+                  candidate.position_control.max_velocity_rad_s);
+          candidate.position_control.minimum_velocity_reverse_rad_s =
+              std::min(
+                  candidate.position_control.minimum_velocity_reverse_rad_s,
+                  candidate.position_control.max_velocity_rad_s);
+          break;
         case ParameterId::MaximumAcceleration: candidate.safety.max_acceleration_rad_s2 = update.value; break;
         case ParameterId::MaximumJerk: candidate.safety.max_jerk_rad_s3 = update.value; break;
         case ParameterId::MaximumCurrent: candidate.safety.max_current_a = update.value; break;
@@ -1770,6 +1865,52 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
           candidate.safety.jerk_limit_enabled =
               update.value != 0.0F;
           break;
+        case ParameterId::PositionKp:
+          candidate.position_control.kp = update.value;
+          break;
+        case ParameterId::PositionKi:
+          candidate.position_control.ki = update.value;
+          break;
+        case ParameterId::PositionKd:
+          candidate.position_control.kd = update.value;
+          break;
+        case ParameterId::PositionMaximumVelocity:
+          candidate.position_control.max_velocity_rad_s = update.value;
+          candidate.position_control.settle_velocity_rad_s =
+              std::min(candidate.position_control.settle_velocity_rad_s,
+                       update.value);
+          candidate.position_control.minimum_velocity_forward_rad_s =
+              std::min(
+                  candidate.position_control.minimum_velocity_forward_rad_s,
+                  update.value);
+          candidate.position_control.minimum_velocity_reverse_rad_s =
+              std::min(
+                  candidate.position_control.minimum_velocity_reverse_rad_s,
+                  update.value);
+          break;
+        case ParameterId::PositionToleranceDeg:
+          candidate.position_control.tolerance_deg = update.value;
+          break;
+        case ParameterId::PositionSettleVelocity:
+          candidate.position_control.settle_velocity_rad_s = update.value;
+          break;
+        case ParameterId::PositionSettleTimeMs:
+          if (!whole(update.value)) {
+            sendAck(frame.sequence, frame.message_id,
+                    ResultCode::InvalidValue);
+            return;
+          }
+          candidate.position_control.settle_time_ms =
+              static_cast<uint32_t>(update.value);
+          break;
+        case ParameterId::PositionMinimumVelocityForward:
+          candidate.position_control.minimum_velocity_forward_rad_s =
+              update.value;
+          break;
+        case ParameterId::PositionMinimumVelocityReverse:
+          candidate.position_control.minimum_velocity_reverse_rad_s =
+              update.value;
+          break;
         default:
           sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue); return;
       }
@@ -1788,6 +1929,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       }
       settings_ = candidate;
       configureVelocityController();
+      configurePositionController();
       motion_limiter_.configure(settings_.safety);
       velocity_estimator_.configure(settings_.encoder, settings_.control.velocity_filter_tau_s,
                                     settings_.motor_model,
@@ -1873,6 +2015,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::StartRun: {
       const auto* selected = selectedProfile();
       if (state_ != RunState::Armed || selected == nullptr ||
+          position_control_active_ ||
           zero_index_calibration_stage_ !=
               ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id, ResultCode::UnsafeState);
@@ -1890,6 +2033,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::StartVelocityTest: {
       if (frame.payload_size != sizeof(VelocityTestPayload) || state_ != RunState::Armed ||
           faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle ||
+          position_control_active_ ||
           zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 frame.payload_size != sizeof(VelocityTestPayload) ? ResultCode::InvalidLength
@@ -1923,6 +2067,7 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::StartVelocitySequence: {
       if (frame.payload_size != sizeof(VelocitySequencePayload) ||
           state_ != RunState::Armed || faults_ != FaultNone ||
+          position_control_active_ ||
           characterization_stage_ != CharacterizationStage::Idle ||
           zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
@@ -1960,6 +2105,44 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
       sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
       return;
     }
+    case MessageId::SetPositionTarget: {
+      if (frame.payload_size != sizeof(PositionTargetPayload) ||
+          state_ != RunState::Armed || faults_ != FaultNone ||
+          telemetry_.zero_index_sequence == 0U ||
+          characterization_stage_ != CharacterizationStage::Idle ||
+          zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
+        sendAck(
+            frame.sequence, frame.message_id,
+            frame.payload_size != sizeof(PositionTargetPayload)
+                ? ResultCode::InvalidLength
+                : ResultCode::UnsafeState);
+        return;
+      }
+      PositionTargetPayload target{};
+      std::memcpy(&target, frame.payload, sizeof(target));
+      if (!std::isfinite(target.target_position_deg) ||
+          target.target_position_deg < 0.0F ||
+          target.target_position_deg >= 360.0F) {
+        sendAck(frame.sequence, frame.message_id, ResultCode::InvalidValue);
+        return;
+      }
+      position_target_deg_ = target.target_position_deg;
+      position_settle_started_us_ = 0U;
+      manual_duty_ = 0.0F;
+      manual_raw_pwm_ = false;
+      manual_command_expiry_us_ = 0U;
+      if (!position_control_active_) {
+        profile_.stop();
+        velocity_step_sequence_.stop();
+        position_controller_.reset();
+        controller_.reset();
+        motion_limiter_.reset(telemetry_.measured_velocity_rad_s);
+        encoder_watchdog_.reset();
+        position_control_active_ = true;
+      }
+      sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
+      return;
+    }
     case MessageId::StopRun:
       transitionToStopped();
       sendAck(frame.sequence, frame.message_id, ResultCode::Ok);
@@ -1967,10 +2150,12 @@ void MachineApplication::handleFrame(const protocol::FrameView& frame) {
     case MessageId::MotorTest: {
       if (frame.payload_size != sizeof(MotorTestPayload) || state_ != RunState::Armed ||
           faults_ != FaultNone || characterization_stage_ != CharacterizationStage::Idle ||
+          position_control_active_ ||
           zero_index_calibration_stage_ != ZeroIndexCalibrationStage::Idle) {
         sendAck(frame.sequence, frame.message_id,
                 state_ != RunState::Armed || faults_ != FaultNone ||
                         characterization_stage_ != CharacterizationStage::Idle ||
+                        position_control_active_ ||
                         zero_index_calibration_stage_ !=
                             ZeroIndexCalibrationStage::Idle
                     ? ResultCode::UnsafeState
@@ -2489,6 +2674,15 @@ void MachineApplication::sendSettings(const uint16_t sequence) {
       settings_.encoder.zero_index_calibration_maximum_error_ticks,
       settings_.encoder.zero_index_calibration_speed_rpm,
       static_cast<uint8_t>(settings_.safety.jerk_limit_enabled),
+      settings_.position_control.kp,
+      settings_.position_control.ki,
+      settings_.position_control.kd,
+      settings_.position_control.max_velocity_rad_s,
+      settings_.position_control.tolerance_deg,
+      settings_.position_control.settle_velocity_rad_s,
+      settings_.position_control.settle_time_ms,
+      settings_.position_control.minimum_velocity_forward_rad_s,
+      settings_.position_control.minimum_velocity_reverse_rad_s,
   };
   serial_link_.send(protocol::MessageId::Settings, sequence, &payload, sizeof(payload));
 }

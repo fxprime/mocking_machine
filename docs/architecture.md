@@ -8,7 +8,7 @@ The physical machine is intentionally hazardous: a 12 V geared brushed-DC motor 
 
 ## Controller design
 
-This project implements the time-correct form:
+The inner velocity loop implements the time-correct form:
 
 ```text
 Δu = Kp Δe + Ki Ts e + Kd Δ²e / Ts
@@ -16,6 +16,22 @@ u[k] = saturate(u[k-1] + Δu)
 ```
 
 Integral contribution that would push a saturated output farther into saturation is rejected. `Kd` defaults to zero, preserving incremental PI behavior.
+
+Referenced rotor positioning adds an outer PID that produces a bounded signed velocity
+request from the shortest wrapped angular error. This is a cascade, so the outer loop never
+writes motor duty directly:
+
+```mermaid
+flowchart LR
+    TARGET["Dragged position target"] --> POSITION["Position PID<br/>shortest wrapped error"]
+    POSITION --> VELOCITY_DEADBAND["Directional minimum usable velocity<br/>except inside position tolerance"]
+    VELOCITY_DEADBAND --> LIMITER["Velocity / acceleration limiter<br/>jerk bypassed in position mode"]
+    LIMITER --> VELOCITY["Incremental velocity PID"]
+    VELOCITY --> PWM_DEADBAND["Forward / reverse PWM<br/>deadband compensation"]
+    PWM_DEADBAND --> PWM["PWM + motor driver"]
+    ROTOR["Encoder + zero-index<br/>rotor position"] --> POSITION
+    ROTOR --> VELOCITY
+```
 
 ## Runtime ownership
 
@@ -28,7 +44,8 @@ flowchart TB
     APP --> TICK["Fixed-deadline control tick<br/>500 Hz default"]
     TICK --> ENCODER["Encoder snapshot +<br/>velocity estimate"]
     ENCODER --> SAFETY["Current / diagnostic / encoder<br/>safety checks"]
-    SAFETY --> LIMITER["Profile → jerk / acceleration /<br/>velocity limiter"]
+    SAFETY --> TARGETS["Profile velocity or<br/>position PID velocity request"]
+    TARGETS --> LIMITER["Jerk / acceleration /<br/>velocity limiter"]
     LIMITER --> CONTROLLER["Incremental velocity controller"]
     CONTROLLER --> DRIVER["VNH2SP30 output"]
     APP --> HEARTBEAT["Heartbeat<br/>1 Hz"]
@@ -61,7 +78,7 @@ Missed control ticks are never replayed against stale sensor data. During active
 
 ## Configuration model
 
-`MachineSettings` owns pins, controller gains, encoder scale, direction-aware Hall-index correction and user zero offset, velocity-estimator selection and window length, motion constraints, current and VIN calibration, supply limits, motor characteristics and observer model, profiles, load labels, serial rate, characterization timing, and WS2812 status configuration. One schema-versioned NVS blob is protected by CRC16. The current schema is 26. Valid schemas 4–25 are migrated explicitly; invalid CRCs, unsupported layouts, or failed validation fall back to firmware defaults.
+`MachineSettings` owns pins, inner velocity and outer position controller gains, direction-specific minimum usable position-control velocities, encoder scale, direction-aware Hall-index correction and user zero offset, velocity-estimator selection and window length, motion constraints, current and VIN calibration, supply limits, motor characteristics and observer model, profiles, load labels, serial rate, characterization timing, and WS2812 status configuration. One schema-versioned NVS blob is protected by CRC16. The current schema is 28. Valid schemas 4–27 are migrated explicitly; invalid CRCs, unsupported layouts, or failed validation fall back to firmware defaults.
 
 Profiles are fixed-capacity structures (8 profiles, 16 waypoints each). Fixed capacity prevents heap fragmentation and makes NVS and protocol limits explicit. All profiles are constrained to one logical direction; `motor_direction` maps that logical direction to electrical polarity.
 

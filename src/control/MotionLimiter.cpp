@@ -12,7 +12,8 @@ void MotionLimiter::reset(const float velocity) {
   target_initialized_ = false;
 }
 
-float MotionLimiter::update(float target, const float dt_s) {
+float MotionLimiter::update(float target, const float dt_s,
+                            const bool apply_jerk_limit) {
   if (!(dt_s > 0.0F)) {
     return velocity_rad_s_;
   }
@@ -27,7 +28,7 @@ float MotionLimiter::update(float target, const float dt_s) {
     target_initialized_ = true;
     return velocity_rad_s_;
   }
-  if (!configuration_.jerk_limit_enabled) {
+  if (!apply_jerk_limit || !configuration_.jerk_limit_enabled) {
     const float previous_velocity = velocity_rad_s_;
     const float maximum_velocity_change =
         maximum_acceleration * dt_s;

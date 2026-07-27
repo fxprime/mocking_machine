@@ -12,6 +12,8 @@
 #include "control/EncoderActivityWatchdog.hpp"
 #include "control/LowPassFilter.hpp"
 #include "control/MotionLimiter.hpp"
+#include "control/MotorDeadband.hpp"
+#include "control/PositionController.hpp"
 #include "control/RotorPosition.hpp"
 #include "control/StatusLedPattern.hpp"
 #include "control/ZeroIndexCalibration.hpp"
@@ -279,6 +281,118 @@ void test_settings_schema_24_frame_crc_vector() {
       0xC565U, protocol::crc16CcittFalse(protected_bytes.data(), protected_bytes.size()));
 }
 
+void test_settings_schema_27_frame_crc_vector() {
+  std::array<uint8_t, 8U + 232U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
+  protected_bytes[3] = 0x01U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 232U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0x2F10U,
+      protocol::crc16CcittFalse(protected_bytes.data(),
+                                protected_bytes.size()));
+}
+
+void test_settings_schema_28_frame_crc_vector() {
+  std::array<uint8_t, 8U + 240U> protected_bytes{};
+  protected_bytes[0] = 1U;
+  protected_bytes[2] = 0x01U;  // SETTINGS 0x0101.
+  protected_bytes[3] = 0x01U;
+  protected_bytes[4] = 0x34U;
+  protected_bytes[5] = 0x12U;
+  protected_bytes[6] = 240U;
+  TEST_ASSERT_EQUAL_HEX16(
+      0xF303U,
+      protocol::crc16CcittFalse(protected_bytes.data(),
+                                protected_bytes.size()));
+}
+
+void test_position_target_frame_crc_vector() {
+  std::array<uint8_t, 8U + 4U> protected_bytes{
+      1U, 0U, 0x07U, 0x02U, 0x34U, 0x12U, 4U, 0U,
+      0x00U, 0x00U, 0xB4U, 0x42U};
+  TEST_ASSERT_EQUAL_HEX16(
+      0xFFD6U,
+      protocol::crc16CcittFalse(protected_bytes.data(),
+                                protected_bytes.size()));
+}
+
+void test_position_controller_uses_shortest_wrapped_error() {
+  PositionController controller;
+  PositionControlConfiguration configuration{};
+  configuration.kp = 2.0F;
+  configuration.ki = 0.0F;
+  configuration.kd = 0.0F;
+  configuration.max_velocity_rad_s = 10.0F;
+  controller.configure(configuration);
+
+  const float forward = controller.update(2.0F, 358.0F, 0.002F);
+  controller.reset();
+  const float reverse = controller.update(358.0F, 2.0F, 0.002F);
+
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 4.0F, controller.errorDegrees() * -1.0F);
+  TEST_ASSERT_TRUE(forward > 0.0F);
+  TEST_ASSERT_TRUE(reverse < 0.0F);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, std::fabs(forward),
+                           std::fabs(reverse));
+}
+
+void test_position_controller_bounds_velocity_demand() {
+  PositionController controller;
+  PositionControlConfiguration configuration{};
+  configuration.kp = 100.0F;
+  configuration.max_velocity_rad_s = 3.0F;
+  controller.configure(configuration);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001F, 3.0F,
+                           controller.update(90.0F, 0.0F, 0.002F));
+}
+
+void test_position_controller_avoids_velocity_deadband_until_intentional_zero() {
+  PositionController controller;
+  PositionControlConfiguration configuration{};
+  configuration.kp = 0.1F;
+  configuration.ki = 0.0F;
+  configuration.kd = 0.0F;
+  configuration.tolerance_deg = 1.0F;
+  configuration.minimum_velocity_forward_rad_s = 2.0F;
+  configuration.minimum_velocity_reverse_rad_s = 3.0F;
+  controller.configure(configuration);
+
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 2.0F, controller.update(2.0F, 0.0F, 0.002F));
+  controller.reset();
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -3.0F, controller.update(358.0F, 0.0F, 0.002F));
+  controller.reset();
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 0.0F, controller.update(0.5F, 0.0F, 0.002F));
+
+  configuration.kp = 0.0F;
+  controller.configure(configuration);
+  controller.reset();
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 2.0F, controller.update(2.0F, 0.0F, 0.002F));
+}
+
+void test_position_velocity_output_uses_directional_motor_deadband() {
+  MotorCharacteristics characteristics{};
+  characteristics.start_duty_forward = 0.20F;
+  characteristics.start_duty_reverse = 0.30F;
+  SafetyConfiguration safety{};
+  safety.max_duty = 0.90F;
+
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 0.60F,
+      compensateMotorDeadband(0.50F, characteristics, safety));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -0.65F,
+      compensateMotorDeadband(-0.50F, characteristics, safety));
+  TEST_ASSERT_EQUAL_FLOAT(
+      0.0F, compensateMotorDeadband(0.0F, characteristics, safety));
+}
+
 void test_rotor_zero_calibration_frame_crc_vector() {
   std::array<uint8_t, 8U + 1U> protected_bytes{};
   protected_bytes[0] = 1U;
@@ -350,7 +464,7 @@ void test_telemetry_rate_respects_uart_bandwidth() {
   const SerialConfiguration defaults{};
   TEST_ASSERT_LESS_OR_EQUAL_UINT16(
       protocol::maximumTelemetryStreamRateHz(defaults.baud), defaults.stream_rate_hz);
-  TEST_ASSERT_EQUAL_UINT32(26U, MachineSettings::kSchemaVersion);
+  TEST_ASSERT_EQUAL_UINT32(28U, MachineSettings::kSchemaVersion);
 }
 
 void test_bearing_configuration_frame_crc_vector() {
@@ -536,6 +650,28 @@ void test_motion_limiter_can_disable_jerk_limit() {
   limiter.reset();
   TEST_ASSERT_FLOAT_WITHIN(
       0.0001F, -1.0F, limiter.update(-100.0F, 0.1F));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -10.0F, limiter.acceleration());
+}
+
+void test_position_motion_can_ignore_enabled_jerk_limit() {
+  SafetyConfiguration configuration{};
+  configuration.max_velocity_rad_s = 100.0F;
+  configuration.max_acceleration_rad_s2 = 10.0F;
+  configuration.max_jerk_rad_s3 = 20.0F;
+  configuration.jerk_limit_enabled = true;
+  MotionLimiter limiter;
+  limiter.configure(configuration);
+  limiter.reset();
+
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 1.0F, limiter.update(100.0F, 0.1F, false));
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 10.0F, limiter.acceleration());
+
+  limiter.reset();
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, -1.0F, limiter.update(-100.0F, 0.1F, false));
   TEST_ASSERT_FLOAT_WITHIN(
       0.0001F, -10.0F, limiter.acceleration());
 }
@@ -952,7 +1088,7 @@ void test_driver_diagnostic_is_disabled_by_default() {
   TEST_ASSERT_TRUE(settings.safety.jerk_limit_enabled);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 20.0F,
                            settings.motor.current_filter_cutoff_hz);
-  TEST_ASSERT_EQUAL_UINT32(26U, settings.schema_version);
+  TEST_ASSERT_EQUAL_UINT32(28U, settings.schema_version);
   TEST_ASSERT_TRUE(settings.status_led.enabled);
   TEST_ASSERT_EQUAL_UINT8(2U, settings.status_led.data_pin);
   TEST_ASSERT_EQUAL_UINT8(4U, settings.status_led.pixel_count);
@@ -1046,6 +1182,10 @@ void test_characterization_clamps_vmax_and_dependent_settings() {
   MachineSettings current{};
   current.safety.max_velocity_rad_s = 150.0F;
   current.safety.encoder_timeout_velocity_rad_s = 120.0F;
+  current.position_control.max_velocity_rad_s = 130.0F;
+  current.position_control.settle_velocity_rad_s = 120.0F;
+  current.position_control.minimum_velocity_forward_rad_s = 115.0F;
+  current.position_control.minimum_velocity_reverse_rad_s = 118.0F;
   current.profile_count = 1U;
   current.profiles[0].target_velocity_rad_s = 140.0F;
   current.profiles[0].sine_mean_rad_s = 100.0F;
@@ -1064,6 +1204,17 @@ void test_characterization_clamps_vmax_and_dependent_settings() {
                            candidate.safety.max_velocity_rad_s);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
                            candidate.safety.encoder_timeout_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 110.0F, candidate.position_control.max_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 110.0F,
+      candidate.position_control.settle_velocity_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 110.0F,
+      candidate.position_control.minimum_velocity_forward_rad_s);
+  TEST_ASSERT_FLOAT_WITHIN(
+      0.0001F, 110.0F,
+      candidate.position_control.minimum_velocity_reverse_rad_s);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
                            candidate.profiles[0].target_velocity_rad_s);
   TEST_ASSERT_FLOAT_WITHIN(0.0001F, 110.0F,
@@ -1131,6 +1282,13 @@ int main(int, char**) {
   RUN_TEST(test_load_configuration_frame_crc_vector);
   RUN_TEST(test_characterization_result_frame_crc_vector);
   RUN_TEST(test_settings_schema_24_frame_crc_vector);
+  RUN_TEST(test_settings_schema_27_frame_crc_vector);
+  RUN_TEST(test_settings_schema_28_frame_crc_vector);
+  RUN_TEST(test_position_target_frame_crc_vector);
+  RUN_TEST(test_position_controller_uses_shortest_wrapped_error);
+  RUN_TEST(test_position_controller_bounds_velocity_demand);
+  RUN_TEST(test_position_controller_avoids_velocity_deadband_until_intentional_zero);
+  RUN_TEST(test_position_velocity_output_uses_directional_motor_deadband);
   RUN_TEST(test_bearing_configuration_frame_crc_vector);
   RUN_TEST(test_rotor_zero_calibration_frame_crc_vector);
   RUN_TEST(test_zero_index_hysteresis_calibration_frame_crc_vector);
@@ -1147,6 +1305,7 @@ int main(int, char**) {
   RUN_TEST(test_motion_limiter_honors_acceleration_and_jerk);
   RUN_TEST(test_motion_limiter_tracks_feasible_ramp_without_ripple);
   RUN_TEST(test_motion_limiter_can_disable_jerk_limit);
+  RUN_TEST(test_position_motion_can_ignore_enabled_jerk_limit);
   RUN_TEST(test_velocity_estimator_uses_output_shaft_cpr);
   RUN_TEST(test_velocity_estimator_uses_each_control_interval_count_delta);
   RUN_TEST(test_velocity_estimator_predicts_from_characterized_motor_model);

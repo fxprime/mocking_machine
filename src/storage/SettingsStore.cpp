@@ -557,10 +557,53 @@ struct LegacyPersistedSettingsV24 {
   uint16_t crc;
 };
 
+struct LegacyMachineSettingsV26 {
+  LegacyMachineSettingsV24 base;
+  StatusLedConfiguration status_led;
+};
+
+struct LegacyPersistedSettingsV26 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV26 payload;
+  uint16_t crc;
+};
+
+struct LegacyPositionControlConfigurationV27 {
+  float kp;
+  float ki;
+  float kd;
+  float max_velocity_rad_s;
+  float tolerance_deg;
+  float settle_velocity_rad_s;
+  uint32_t settle_time_ms;
+};
+
+struct LegacyMachineSettingsV27 {
+  LegacyMachineSettingsV26 base;
+  LegacyPositionControlConfigurationV27 position_control;
+};
+
+struct LegacyPersistedSettingsV27 {
+  uint32_t magic;
+  uint32_t schema_version;
+  uint32_t payload_size;
+  LegacyMachineSettingsV27 payload;
+  uint16_t crc;
+};
+
 static_assert(sizeof(LegacyMachineSettingsV24) +
                       sizeof(StatusLedConfiguration) ==
-                  sizeof(MachineSettings),
+                  sizeof(LegacyMachineSettingsV26),
               "Schema-v25 status LED settings must remain append-only");
+static_assert(sizeof(LegacyMachineSettingsV26) +
+                      sizeof(LegacyPositionControlConfigurationV27) ==
+                  sizeof(LegacyMachineSettingsV27),
+              "Schema-v27 position settings must remain append-only");
+static_assert(sizeof(LegacyMachineSettingsV27) + 2U * sizeof(float) ==
+                  sizeof(MachineSettings),
+              "Schema-v28 position velocity deadbands must remain append-only");
 
 static_assert(sizeof(LegacyMachineSettingsV4) + sizeof(float) ==
                   sizeof(LegacyMachineSettingsV5),
@@ -806,7 +849,9 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       settings.status_led.command_blink_off_ms < 20U ||
       settings.status_led.command_blink_off_ms > 1000U ||
       settings.status_led.fault_blink_interval_ms < 50U ||
-      settings.status_led.fault_blink_interval_ms > 2000U) {
+      settings.status_led.fault_blink_interval_ms > 2000U ||
+      settings.position_control.settle_time_ms < 20U ||
+      settings.position_control.settle_time_ms > 10000U) {
     return false;
   }
   if (!finite(settings.control.kp) || !finite(settings.control.ki) ||
@@ -835,8 +880,33 @@ bool SettingsStore::validate(const MachineSettings& settings) {
       !finite(settings.supply_voltage.input_offset_v) ||
       !finite(settings.safety.min_supply_voltage_v) ||
       !finite(settings.safety.max_supply_voltage_v) ||
+      !finite(settings.position_control.kp) ||
+      !finite(settings.position_control.ki) ||
+      !finite(settings.position_control.kd) ||
+      !finite(settings.position_control.max_velocity_rad_s) ||
+      !finite(settings.position_control.tolerance_deg) ||
+      !finite(settings.position_control.settle_velocity_rad_s) ||
+      !finite(settings.position_control.minimum_velocity_forward_rad_s) ||
+      !finite(settings.position_control.minimum_velocity_reverse_rad_s) ||
       settings.safety.max_velocity_rad_s <= 0.0F ||
       settings.safety.max_acceleration_rad_s2 <= 0.0F ||
+      settings.position_control.kp < 0.0F ||
+      settings.position_control.ki < 0.0F ||
+      settings.position_control.kd < 0.0F ||
+      settings.position_control.max_velocity_rad_s <= 0.0F ||
+      settings.position_control.max_velocity_rad_s >
+          settings.safety.max_velocity_rad_s ||
+      settings.position_control.tolerance_deg <= 0.0F ||
+      settings.position_control.tolerance_deg > 30.0F ||
+      settings.position_control.settle_velocity_rad_s < 0.0F ||
+      settings.position_control.settle_velocity_rad_s >
+          settings.position_control.max_velocity_rad_s ||
+      settings.position_control.minimum_velocity_forward_rad_s <= 0.0F ||
+      settings.position_control.minimum_velocity_forward_rad_s >
+          settings.position_control.max_velocity_rad_s ||
+      settings.position_control.minimum_velocity_reverse_rad_s <= 0.0F ||
+      settings.position_control.minimum_velocity_reverse_rad_s >
+          settings.position_control.max_velocity_rad_s ||
       settings.control.kp < 0.0F || settings.control.ki < 0.0F ||
       settings.control.kd < 0.0F ||
       settings.control.max_feedback_correction <= 0.0F ||
@@ -1042,11 +1112,92 @@ bool SettingsStore::load(MachineSettings& settings) {
     if (valid_blob && current_schema) {
       settings = blob.payload;
       loaded = validate(settings);
-    } else if (valid_blob && blob.schema_version == 25U &&
-               blob.payload.schema_version == 25U) {
-      settings = blob.payload;
-      settings.schema_version = MachineSettings::kSchemaVersion;
-      settings.status_led.pixel_count = 4U;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV27)) {
+    LegacyPersistedSettingsV27 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload),
+        sizeof(blob.payload));
+    const bool compatible_schema =
+        blob.schema_version == 27U &&
+        blob.payload.base.base.schema_version == blob.schema_version;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        compatible_schema && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.base.base.pins;
+      settings.control = blob.payload.base.base.control;
+      settings.motor = blob.payload.base.base.motor;
+      settings.supply_voltage = blob.payload.base.base.supply_voltage;
+      settings.safety = blob.payload.base.base.safety;
+      settings.serial = blob.payload.base.base.serial;
+      settings.encoder = blob.payload.base.base.encoder;
+      settings.characterization = blob.payload.base.base.characterization;
+      settings.load_setting = blob.payload.base.base.load_setting;
+      settings.profile_count = blob.payload.base.base.profile_count;
+      settings.selected_profile_id =
+          blob.payload.base.base.selected_profile_id;
+      settings.profiles = blob.payload.base.base.profiles;
+      settings.motor_direction = blob.payload.base.base.motor_direction;
+      settings.stop_mode = blob.payload.base.base.stop_mode;
+      settings.motor_model = blob.payload.base.base.motor_model;
+      settings.velocity_estimator_method =
+          blob.payload.base.base.velocity_estimator_method;
+      settings.velocity_acceleration_window_samples =
+          blob.payload.base.base.velocity_acceleration_window_samples;
+      settings.status_led = blob.payload.base.status_led;
+      settings.position_control.kp = blob.payload.position_control.kp;
+      settings.position_control.ki = blob.payload.position_control.ki;
+      settings.position_control.kd = blob.payload.position_control.kd;
+      settings.position_control.max_velocity_rad_s =
+          blob.payload.position_control.max_velocity_rad_s;
+      settings.position_control.tolerance_deg =
+          blob.payload.position_control.tolerance_deg;
+      settings.position_control.settle_velocity_rad_s =
+          blob.payload.position_control.settle_velocity_rad_s;
+      settings.position_control.settle_time_ms =
+          blob.payload.position_control.settle_time_ms;
+      loaded = validate(settings);
+      migrated = loaded;
+      migrated_bearing_value_is_valid = loaded;
+    }
+  } else if (stored_size == sizeof(LegacyPersistedSettingsV26)) {
+    LegacyPersistedSettingsV26 blob{};
+    const size_t bytes = preferences.getBytes(kBlobKey, &blob, sizeof(blob));
+    const uint16_t crc = protocol::crc16CcittFalse(
+        reinterpret_cast<const uint8_t*>(&blob.payload),
+        sizeof(blob.payload));
+    const bool compatible_schema =
+        (blob.schema_version == 25U || blob.schema_version == 26U) &&
+        blob.payload.base.schema_version == blob.schema_version;
+    if (bytes == sizeof(blob) && blob.magic == kSettingsMagic &&
+        compatible_schema && blob.payload_size == sizeof(blob.payload) &&
+        blob.crc == crc) {
+      settings = defaults();
+      settings.pins = blob.payload.base.pins;
+      settings.control = blob.payload.base.control;
+      settings.motor = blob.payload.base.motor;
+      settings.supply_voltage = blob.payload.base.supply_voltage;
+      settings.safety = blob.payload.base.safety;
+      settings.serial = blob.payload.base.serial;
+      settings.encoder = blob.payload.base.encoder;
+      settings.characterization = blob.payload.base.characterization;
+      settings.load_setting = blob.payload.base.load_setting;
+      settings.profile_count = blob.payload.base.profile_count;
+      settings.selected_profile_id = blob.payload.base.selected_profile_id;
+      settings.profiles = blob.payload.base.profiles;
+      settings.motor_direction = blob.payload.base.motor_direction;
+      settings.stop_mode = blob.payload.base.stop_mode;
+      settings.motor_model = blob.payload.base.motor_model;
+      settings.velocity_estimator_method =
+          blob.payload.base.velocity_estimator_method;
+      settings.velocity_acceleration_window_samples =
+          blob.payload.base.velocity_acceleration_window_samples;
+      settings.status_led = blob.payload.status_led;
+      if (blob.schema_version == 25U) {
+        settings.status_led.pixel_count = 4U;
+      }
       loaded = validate(settings);
       migrated = loaded;
       migrated_bearing_value_is_valid = loaded;

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "control/MotorDeadband.hpp"
+
 namespace mm {
 
 bool Vnh2sp30MotorDriver::begin(const MachineSettings& settings) {
@@ -37,8 +39,9 @@ void Vnh2sp30MotorDriver::writeDirection(const bool forward) {
 }
 
 void Vnh2sp30MotorDriver::command(float signed_duty) {
-  signed_duty = std::clamp(signed_duty, -safety_.max_duty, safety_.max_duty);
-  if (std::fabs(signed_duty) < 0.0001F) {
+  signed_duty =
+      compensateMotorDeadband(signed_duty, characteristics_, safety_);
+  if (signed_duty == 0.0F) {
     stop();
     return;
   }
@@ -47,14 +50,11 @@ void Vnh2sp30MotorDriver::command(float signed_duty) {
   const bool electrical_forward = motor_direction_ > 0 ? logical_forward : !logical_forward;
   writeDirection(electrical_forward);
 
-  const float minimum = logical_forward ? characteristics_.start_duty_forward
-                                        : characteristics_.start_duty_reverse;
   const float magnitude = std::fabs(signed_duty);
-  const float compensated = minimum + magnitude * (1.0F - minimum);
   const auto pwm = static_cast<uint32_t>(
-      std::lround(std::clamp(compensated, 0.0F, safety_.max_duty) * kPwmMaximum));
+      std::lround(magnitude * kPwmMaximum));
   ledcWrite(kPwmChannel, pwm);
-  applied_duty_ = logical_forward ? compensated : -compensated;
+  applied_duty_ = signed_duty;
 }
 
 void Vnh2sp30MotorDriver::commandRaw(float signed_duty) {

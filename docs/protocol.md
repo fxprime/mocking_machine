@@ -83,7 +83,7 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 | `0x0001` | [HEARTBEAT](#heartbeat-0x0001) | Device → host | 65 | Device identity, state, and health |
 | `0x0002` | [ACK](#ack-0x0002) | Device → host | 3 | Command result |
 | `0x0100` | [GET_SETTINGS](#get_settings-0x0100) | Host → device | 0 | Request current settings |
-| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 204 | Complete runtime settings snapshot |
+| `0x0101` | [SETTINGS](#settings-0x0101) | Device → host | 240 | Complete runtime settings snapshot |
 | `0x0110` | [SET_CONTROLLER](#controller-gain-messages-0x0110-0x0114) | Host → device | 12 | Apply gains to RAM |
 | `0x0111` | [SET_DRIVER_DIAGNOSTIC](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable EN/DIAG protection |
 | `0x0112` | [SET_CURRENT_SENSE](#protection-enable-messages-0x0111-0x0112) | Host → device | 1 | Enable or disable overcurrent protection |
@@ -111,13 +111,14 @@ Frames with an unsupported version, payload larger than 512 bytes, or incorrect 
 
 | ID | Name | Direction | Bytes | Description |
 |---:|---|---|---:|---|
-| `0x0200` | [START_RUN](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Run the selected profile |
-| `0x0201` | [STOP_RUN](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Stop and disarm |
+| `0x0200` | [START_RUN](#runtime-control-messages-0x0200-0x0207) | Host → device | 0 | Run the selected profile |
+| `0x0201` | [STOP_RUN](#runtime-control-messages-0x0200-0x0207) | Host → device | 0 | Stop and disarm |
 | `0x0202` | [MOTOR_TEST](#motor_test-0x0202) | Host → device | 4 | Apply raw signed duty |
-| `0x0203` | [CLEAR_FAULTS](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Clear and recheck operational faults |
-| `0x0204` | [ARM](#runtime-control-messages-0x0200-0x0206) | Host → device | 0 | Enter armed state after safety checks |
+| `0x0203` | [CLEAR_FAULTS](#runtime-control-messages-0x0200-0x0207) | Host → device | 0 | Clear and recheck operational faults |
+| `0x0204` | [ARM](#runtime-control-messages-0x0200-0x0207) | Host → device | 0 | Enter armed state after safety checks |
 | `0x0205` | [START_VELOCITY_TEST](#start_velocity_test-0x0205) | Host → device | 8 | Run a temporary constrained step |
 | `0x0206` | [START_VELOCITY_SEQUENCE](#start_velocity_sequence-0x0206) | Host → device | 72 | Run a bounded temporary velocity-level sequence |
+| `0x0207` | [SET_POSITION_TARGET](#set_position_target-0x0207) | Host → device | 4 | Move the referenced rotor to a wrapped angular target |
 | `0x0210` | [START_STREAM](#stream-control-messages-0x0210-0x0211) | Host → device | 0 | Synchronize state and enable telemetry |
 | `0x0211` | [STOP_STREAM](#stream-control-messages-0x0210-0x0211) | Host → device | 0 | Disable telemetry |
 | `0x0220` | [TELEMETRY](#telemetry-0x0220) | Device → host | 84 | Machine measurement sample |
@@ -235,6 +236,15 @@ Complete packed settings snapshot. The field order is append-only for backward-c
 | 197 | `zero_index_calibration_maximum_error_ticks` | `u16` | encoder ticks | Maximum allowed CPR interval error and circular edge residual |
 | 199 | `zero_index_calibration_speed_rpm` | `f32` | RPM | Closed-loop speed magnitude used for both calibration directions; default 15 RPM |
 | 203 | `jerk_limit_enabled` | `u8` | `0`, `1` | Enables jerk-bounded motion limiting; zero retains velocity and acceleration limits only |
+| 204 | `position_kp` | `f32` | 1/s | Outer position-loop proportional gain |
+| 208 | `position_ki` | `f32` | 1/s² | Outer position-loop integral gain |
+| 212 | `position_kd` | `f32` | — | Outer position-loop derivative gain |
+| 216 | `position_max_velocity_rad_s` | `f32` | rad/s | Maximum velocity demand from the position loop |
+| 220 | `position_tolerance_deg` | `f32` | deg | Settled position-error threshold |
+| 224 | `position_settle_velocity_rad_s` | `f32` | rad/s | Settled measured-velocity threshold |
+| 228 | `position_settle_time_ms` | `u32` | ms | Required continuous settled interval |
+| 232 | `position_minimum_velocity_forward_rad_s` | `f32` | rad/s | Minimum positive position-loop velocity request outside position tolerance |
+| 236 | `position_minimum_velocity_reverse_rad_s` | `f32` | rad/s | Minimum magnitude of negative position-loop velocity request outside position tolerance |
 
 The encoder watchdog starts when desired velocity first exceeds its configured threshold. Each valid quadrature transition refreshes activity. Dropping below the threshold or stopping resets the watchdog window.
 
@@ -347,7 +357,7 @@ Slots must be unique. `SET_LOAD_CONFIGURATION` persists the complete configurati
 condition or rotor loads advances the shared `setting_id`, and neither operation changes
 the other part of the setup.
 
-### Runtime control messages (0x0200-0x0206)
+### Runtime control messages (0x0200-0x0207)
 
 - `ARM` performs all safety checks. Hosts must wait for a successful ACK before starting motion.
 - `START_RUN` runs the current runtime profile and requires the armed state.
@@ -396,6 +406,31 @@ command reverse motion. `hold_ms × level_count` must not exceed 3,600,000 ms. A
 level, the normal acceleration and jerk limiter returns the target to zero before the
 machine stops and disarms. The payload is fixed at 72 bytes and remains covered by the
 normal frame CRC.
+
+### SET_POSITION_TARGET (0x0207)
+
+Moves the referenced rotor to a wrapped angular position while the machine remains armed.
+
+| Offset | Field name | Type | Units / values | Description |
+|---:|---|---|---|---|
+| 0 | `target_position_deg` | `f32` | `[0, 360)` deg | Desired rotor phase |
+
+The command requires an armed, fault-free machine and at least one accepted zero-index
+reference. Firmware uses the shortest signed angular error. Inside the configured position
+tolerance, the outer loop intentionally requests exactly zero velocity. Outside that
+tolerance, its bounded output is lifted to at least
+`position_minimum_velocity_forward_rad_s` or
+`position_minimum_velocity_reverse_rad_s` according to direction, so the steady position
+request cannot remain in an unusable velocity region. Position control always bypasses jerk
+limiting, regardless of `jerk_limit_enabled`; maximum velocity and acceleration limiting
+remain active. The incremental velocity PID then produces PWM through the normal
+safety-controlled motor driver. Every nonzero position-control output therefore also receives the characterized
+`start_duty_forward` or `start_duty_reverse` compensation according to its logical direction;
+raw motor tests remain the only path that bypasses this mapping.
+Repeated targets update an active move without resetting the velocity loop, which supports
+dragging. Motion stops while remaining armed after position error and measured velocity stay
+inside their configured thresholds for the configured settle time. `STOP_RUN`, a fault, or
+disarming cancels the move.
 
 ### Stream control messages (0x0210, 0x0211)
 
@@ -733,6 +768,15 @@ All values are transported as `f32`, including integer and Boolean settings. Fir
 | 43 | `ZERO_INDEX_CALIBRATION_MAXIMUM_ERROR_TICKS` | encoder ticks | Maximum CPR interval error and edge jitter |
 | 44 | `ZERO_INDEX_CALIBRATION_SPEED_RPM` | RPM | Closed-loop calibration speed magnitude; valid 1–120 and limited by maximum velocity |
 | 45 | `JERK_LIMIT_ENABLED` | `0`, `1` | Enables jerk limiting; zero keeps acceleration limiting active |
+| 46 | `POSITION_KP` | 1/s | Outer position-loop proportional gain |
+| 47 | `POSITION_KI` | 1/s² | Outer position-loop integral gain |
+| 48 | `POSITION_KD` | — | Outer position-loop derivative gain |
+| 49 | `POSITION_MAXIMUM_VELOCITY` | rad/s | Maximum outer-loop velocity request; cannot exceed machine maximum velocity |
+| 50 | `POSITION_TOLERANCE_DEG` | deg | Settled angular error; valid above 0 through 30° |
+| 51 | `POSITION_SETTLE_VELOCITY` | rad/s | Settled measured-speed threshold |
+| 52 | `POSITION_SETTLE_TIME_MS` | ms | Continuous settled time; valid 20–10,000 ms |
+| 53 | `POSITION_MINIMUM_VELOCITY_FORWARD` | rad/s | Minimum positive position-loop request outside tolerance; above 0 and no greater than position maximum velocity |
+| 54 | `POSITION_MINIMUM_VELOCITY_REVERSE` | rad/s | Minimum magnitude of negative position-loop request outside tolerance; above 0 and no greater than position maximum velocity |
 
 Lower current-filter cutoff reduces noise but delays software overcurrent detection. Hardware current limiting and a correctly sized fuse remain mandatory.
 
@@ -759,6 +803,13 @@ counts entirely after the initial reference; one snaps fully to every accepted e
 3. Send `START_RUN` and wait for `OK`.
 4. Arm the local recorder after that ACK; begin appending samples only when telemetry state first becomes `RUNNING`.
 5. Stop appending when telemetry leaves `RUNNING`. Send `STOP_RUN` when required; the firmware also stops at profile completion.
+
+### Drag the rotor to a position
+
+1. Wait for telemetry to report a nonzero `zero_index_sequence`.
+2. Send `ARM` and wait for `OK`.
+3. While dragging, send bounded `SET_POSITION_TARGET` updates; the browser limits these to 20 Hz and sends the final pointer position on release.
+4. Send `STOP_RUN` to cancel and disarm, or allow firmware to stop at the settled target while retaining the armed state.
 
 ### Recover from a fault
 
@@ -794,7 +845,7 @@ adapter for Node.js serial libraries.
 
 ## Compatibility
 
-Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 26.
+Wire protocol version and Preferences schema are separate concepts. Protocol version 1 currently transports settings schema 28.
 
 | Settings schema | Change |
 |---:|---|
@@ -814,8 +865,10 @@ Wire protocol version and Preferences schema are separate concepts. Protocol ver
 | 24 | Added a persistent jerk-limit enable switch; disabling it preserves velocity and acceleration limits |
 | 25 | Added persistent one-pixel WS2812 status LED hardware and indication timing settings |
 | 26 | Added a configurable WS2812 pixel count, defaulting to a four-pixel rectangular module |
+| 27 | Added persistent outer position-loop settings and drag-commanded wrapped rotor positioning |
+| 28 | Added direction-specific minimum usable velocity requests for position control |
 
-The current loader explicitly migrates valid schema 4–25 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Schema 23 migrates with jerk limiting enabled. Schemas 23–24 receive the default status LED configuration, and schema 25 receives the default four-pixel count. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-26 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
+The current loader explicitly migrates valid schema 4–27 Preferences layouts while preserving prior values and supplying defaults for fields introduced later. Schema 17–19 degree-based rotor offsets are cleared during migration because they are intentionally replaced by the schema-20 integer tick reference. Schemas before 21 default the bearing condition to good. Schemas before 22 default the hysteresis correction to uncalibrated. Schema 22 preserves its hysteresis results and receives the default 15 RPM closed-loop calibration speed. Schema 23 migrates with jerk limiting enabled. Schemas 23–24 receive the default status LED configuration, schema 25 receives the default four-pixel count, schemas 25–26 receive default position-control settings, and schema 27 receives default forward and reverse position-control minimum velocities. Invalid CRCs, unsupported sizes/schemas, or settings that fail validation fall back to schema-28 defaults. For append-only response changes, hosts should gate optional decoding by payload size. In particular:
 
 Schema-14 settings with a valid motor model migrate to method `1`, preserving the observer behavior
 that schema enabled implicitly. Other older settings migrate to method `0`.
@@ -830,5 +883,7 @@ that schema enabled implicitly. Other older settings migrate to method `0`.
 - The schema-22 zero-index hysteresis extension begins at byte 177.
 - The schema-23 closed-loop zero-index calibration speed begins at byte 199.
 - The schema-24 jerk-limit enable flag is byte 203.
+- The schema-27 position-control extension begins at byte 204.
+- The schema-28 direction-specific position velocity minimums begin at byte 232.
 
 Message IDs, packed field order, fixed-array capacities, and CRC behavior are protocol contracts. Any change to them requires synchronized firmware, browser, tests, and this document.

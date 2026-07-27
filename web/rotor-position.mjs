@@ -1,6 +1,11 @@
-function normalizeDegrees(angleDeg) {
+export function normalizeDegrees(angleDeg) {
   const normalized = Number(angleDeg) % 360;
   return normalized < 0 ? normalized + 360 : normalized;
+}
+
+export function pointerAngleDegrees(clientX, clientY, centerX, centerY) {
+  return normalizeDegrees(
+      Math.atan2(clientX - centerX, centerY - clientY) * 180 / Math.PI);
 }
 
 function shortestAngleDelta(fromDeg, toDeg) {

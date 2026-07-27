@@ -187,6 +187,18 @@ struct StatusLedConfiguration {
   uint8_t pixel_count = 4U;
 };
 
+struct PositionControlConfiguration {
+  float kp = 5.0F;
+  float ki = 0.0F;
+  float kd = 0.15F;
+  float max_velocity_rad_s = 20.0F;
+  float tolerance_deg = 1.0F;
+  float settle_velocity_rad_s = 0.5F;
+  uint32_t settle_time_ms = 250U;
+  float minimum_velocity_forward_rad_s = 1.0F;
+  float minimum_velocity_reverse_rad_s = 1.0F;
+};
+
 struct CharacterizationDynamicsResult {
   float acceleration_forward_rad_s2 = 0.0F;
   float acceleration_reverse_rad_s2 = 0.0F;
@@ -230,7 +242,7 @@ struct VelocityProfileConfiguration {
 };
 
 struct MachineSettings {
-  static constexpr uint32_t kSchemaVersion = 26;
+  static constexpr uint32_t kSchemaVersion = 28;
   uint32_t schema_version = kSchemaVersion;
   PinConfiguration pins{};
   ControlConfiguration control{};
@@ -250,6 +262,7 @@ struct MachineSettings {
   VelocityEstimatorMethod velocity_estimator_method = VelocityEstimatorMethod::LowPass;
   uint32_t velocity_acceleration_window_samples = 5U;
   StatusLedConfiguration status_led{};
+  PositionControlConfiguration position_control{};
 };
 
 struct TelemetrySample {
